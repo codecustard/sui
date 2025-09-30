@@ -1,59 +1,160 @@
-# `sui`
+# SUI Motoko Library
 
-Welcome to your new `sui` project and to the Internet Computer development community. By default, creating a new project adds this README and some template files to your project directory. You can edit these template files to customize your project and to include your own code to speed up the development cycle.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-To get started, you might want to explore the project directory structure and the default configuration file. Working with this project in your development environment will not affect any production deployment or identity tokens.
+A comprehensive SUI blockchain library for Internet Computer (IC) built in Motoko. This library provides essential tools for working with SUI addresses, transactions, and blockchain operations within the IC ecosystem.
 
-To learn more before you start working with `sui`, see the following documentation available online:
+## Features
 
-- [Quick Start](https://internetcomputer.org/docs/current/developer-docs/setup/deploy-locally)
-- [SDK Developer Tools](https://internetcomputer.org/docs/current/developer-docs/setup/install)
-- [Motoko Programming Language Guide](https://internetcomputer.org/docs/current/motoko/main/motoko)
-- [Motoko Language Quick Reference](https://internetcomputer.org/docs/current/motoko/main/language-manual)
+- **Address Management**: Generate, validate, and normalize SUI addresses
+- **Transaction Building**: Create and manage SUI transactions (transfers, move calls, etc.)
+- **Type Definitions**: Complete type system for SUI blockchain objects
+- **Utilities**: Helper functions for common operations
 
-If you want to start working on your project right away, you might want to try the following commands:
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Modules](#modules)
+- [Usage Examples](#usage-examples)
+- [API Reference](#api-reference)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Installation
+
+### For Library Usage (Mops)
 
 ```bash
-cd sui/
-dfx help
-dfx canister --help
+# Install Mops if not already installed
+npm i -g ic-mops
+
+# Add the SUI package to your project
+mops add sui
 ```
 
-## Running the project locally
-
-If you want to test your project locally, you can use the following commands:
+### For Development
 
 ```bash
-# Starts the replica, running in the background
+git clone <repository-url>
+cd sui
+mops install
 dfx start --background
-
-# Deploys your canisters to the replica and generates your candid interface
 dfx deploy
 ```
 
-Once the job completes, your application will be available at `http://localhost:4943?canisterId={asset_canister_id}`.
+## Quick Start
 
-If you have made changes to your backend canister, you can generate a new candid interface with
+```motoko
+import Sui "mo:sui";
 
-```bash
-npm run generate
+// Validate a SUI address
+let isValid = Sui.Address.isValidAddress("0x1234567890abcdef1234567890abcdef12345678");
+
+// Create a simple transaction
+let gasData = {
+  payment = [];
+  owner = "0x1234567890abcdef1234567890abcdef12345678";
+  price = 1000;
+  budget = 10000;
+};
+
+let txData = Sui.Transaction.createTransferTransaction(
+  "0x1234567890abcdef1234567890abcdef12345678", // sender
+  "0xabcdef1234567890abcdef1234567890abcdef12", // recipient
+  [],                                            // objects to transfer
+  gasData
+);
 ```
 
-at any time. This is recommended before starting the frontend development server, and will be run automatically any time you run `dfx deploy`.
+## Modules
 
-If you are making frontend changes, you can start a development server with
+### Types (`src/types.mo`)
+Core type definitions for SUI blockchain objects:
+- `SuiAddress` - SUI address type
+- `ObjectRef` - Object reference type
+- `TransactionData` - Transaction data structure
+- `Command` - Transaction command variants
+- And many more...
 
-```bash
-npm start
+### Address (`src/address.mo`)
+Address validation and manipulation:
+- `isValidAddress()` - Validate SUI address format
+- `normalizeAddress()` - Normalize address format
+- `publicKeyToAddress()` - Generate address from public key
+
+### Transaction (`src/transaction.mo`)
+Transaction creation and management:
+- `createTransferTransaction()` - Create transfer transactions
+- `createMoveCallTransaction()` - Create move call transactions
+- `signTransaction()` - Sign transactions (placeholder)
+
+### Utils (`src/utils.mo`)
+Utility functions:
+- `bytesToHex()` - Convert bytes to hex string
+- `hashText()` - Simple text hashing
+- String manipulation functions
+
+## Usage Examples
+
+### Validating Addresses
+
+```motoko
+import Sui "mo:sui";
+
+public func validateAddress(address : Text) : Bool {
+  Sui.Address.isValidAddress(address)
+}
 ```
 
-Which will start a server at `http://localhost:8080`, proxying API requests to the replica at port 4943.
+### Creating Transactions
 
-### Note on frontend environment variables
+```motoko
+import Sui "mo:sui";
 
-If you are hosting frontend code somewhere without using DFX, you may need to make one of the following adjustments to ensure your project does not fetch the root key in production:
+public func createSampleTx(sender : Text) : Sui.Types.TransactionData {
+  let gasData = {
+    payment = [];
+    owner = sender;
+    price = 1000;
+    budget = 10000;
+  };
 
-- set`DFX_NETWORK` to `ic` if you are using Webpack
-- use your own preferred method to replace `process.env.DFX_NETWORK` in the autogenerated declarations
-  - Setting `canisters -> {asset_canister_id} -> declarations -> env_override to a string` in `dfx.json` will replace `process.env.DFX_NETWORK` with the string in the autogenerated declarations
-- Write your own `createActor` constructor
+  Sui.Transaction.createTransferTransaction(sender, recipient, [], gasData)
+}
+```
+
+## Development
+
+### Running Locally
+
+```bash
+# Start the replica
+dfx start --background
+
+# Deploy canisters
+dfx deploy
+
+# Run tests
+mops test
+```
+
+### Project Structure
+
+```
+src/
+├── lib.mo          # Main library entry point
+├── types.mo        # Type definitions
+├── address.mo      # Address utilities
+├── transaction.mo  # Transaction builder
+├── utils.mo        # Utility functions
+└── sui_backend/
+    └── main.mo     # Example canister
+test/
+└── lib.test.mo     # Tests
+```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -1,0 +1,14 @@
+dev-dependencies = { }
+
+[package]
+name = "sui"
+version = "0.1.0"
+description = "SUI blockchain library for Internet Computer"
+repository = "https://github.com/codecustard/sui"
+keywords = [ "sui", "blockchain", "motoko", "icp", "crypto" ]
+license = "MIT"
+
+[dependencies]
+base = "0.16.0"
+hex = "1.0.2"
+blake2b = "0.1.0"

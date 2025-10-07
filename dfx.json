@@ -3,6 +3,10 @@
     "sui_backend": {
       "main": "src/sui_backend/main.mo",
       "type": "motoko"
+    },
+    "sui_example_basic": {
+      "main": "examples/sui_example_basic.mo",
+      "type": "motoko"
     }
   },
   "defaults": {

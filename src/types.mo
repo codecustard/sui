@@ -118,4 +118,14 @@ module {
     balance: Nat64;
     previousTransaction: TransactionDigest;
   };
+
+  // HTTP request types for outbound calls
+  public type HttpRequestArgs = {
+    url : Text;
+    max_response_bytes: ?Nat64;
+    headers: [{name: Text; value: Text}];
+    body: ?Blob;
+    method: {#get; #head; #post; #put; #patch; #delete};
+    transform: ?{function: {context: Blob; response: {status: Nat; body: Blob; headers: [{name: Text; value: Text}]}} -> {body: Blob; headers: [{name: Text; value: Text}]}; context: Blob};
+  };
 }

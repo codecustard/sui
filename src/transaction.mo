@@ -1,6 +1,12 @@
 import Result "mo:base/Result";
 import Array "mo:base/Array";
 import Buffer "mo:base/Buffer";
+import Nat8 "mo:base/Nat8";
+import Nat32 "mo:base/Nat32";
+import Nat64 "mo:base/Nat64";
+import Text "mo:base/Text";
+import Char "mo:base/Char";
+import Iter "mo:base/Iter";
 import Types "types";
 
 module {
@@ -302,5 +308,257 @@ module {
   // Verify transaction signature (placeholder)
   public func verifyTransaction(transaction : Transaction) : Bool {
     transaction.txSignatures.size() > 0
+  };
+
+  // Serialize TransactionData to BCS bytes for SUI network
+  public func serializeTransaction(tx_data : TransactionData) : [Nat8] {
+    let buffer = Buffer.Buffer<Nat8>(512);
+
+    // SUI TransactionData BCS format:
+    // 1. TransactionKind
+    switch (tx_data.kind) {
+      case (#ProgrammableTransaction(pt)) {
+        buffer.add(0); // Tag for ProgrammableTransaction
+
+        // Serialize inputs
+        serializeULEB128(buffer, pt.inputs.size());
+        for (input in pt.inputs.vals()) {
+          switch (input) {
+            case (#Pure(data)) {
+              buffer.add(0); // Tag for Pure
+              serializeULEB128(buffer, data.size());
+              for (byte in data.vals()) {
+                buffer.add(byte);
+              };
+            };
+            case (#Object(obj_ref)) {
+              buffer.add(1); // Tag for Object
+              serializeObjectRef(buffer, obj_ref);
+            };
+            case (#ObjVec(obj_refs)) {
+              buffer.add(2); // Tag for ObjVec
+              serializeULEB128(buffer, obj_refs.size());
+              for (obj_ref in obj_refs.vals()) {
+                serializeObjectRef(buffer, obj_ref);
+              };
+            };
+          };
+        };
+
+        // Serialize commands
+        serializeULEB128(buffer, pt.commands.size());
+        for (command in pt.commands.vals()) {
+          switch (command) {
+            case (#MoveCall(move_call)) {
+              buffer.add(0); // Tag for MoveCall
+
+              // Package (32 bytes)
+              serializeAddress(buffer, move_call.package);
+
+              // Module name
+              serializeString(buffer, move_call.moduleName);
+
+              // Function name
+              serializeString(buffer, move_call.functionName);
+
+              // Type arguments
+              serializeULEB128(buffer, move_call.typeArguments.size());
+              for (type_arg in move_call.typeArguments.vals()) {
+                serializeString(buffer, type_arg);
+              };
+
+              // Arguments
+              serializeULEB128(buffer, move_call.arguments.size());
+              for (arg in move_call.arguments.vals()) {
+                serializeCallArg(buffer, arg);
+              };
+            };
+            case (#TransferObjects(transfer)) {
+              buffer.add(1); // Tag for TransferObjects
+
+              serializeULEB128(buffer, transfer.objects.size());
+              for (obj in transfer.objects.vals()) {
+                serializeCallArg(buffer, obj);
+              };
+              serializeCallArg(buffer, transfer.address);
+            };
+            case (#SplitCoins(split)) {
+              buffer.add(2); // Tag for SplitCoins
+
+              serializeCallArg(buffer, split.coin);
+              serializeULEB128(buffer, split.amounts.size());
+              for (amount in split.amounts.vals()) {
+                serializeCallArg(buffer, amount);
+              };
+            };
+            case (#MergeCoins(merge)) {
+              buffer.add(3); // Tag for MergeCoins
+
+              serializeCallArg(buffer, merge.destination);
+              serializeULEB128(buffer, merge.sources.size());
+              for (source in merge.sources.vals()) {
+                serializeCallArg(buffer, source);
+              };
+            };
+          };
+        };
+      };
+    };
+
+    // 2. Sender (32 bytes)
+    serializeAddress(buffer, tx_data.sender);
+
+    // 3. GasData
+    serializeULEB128(buffer, tx_data.gasData.payment.size());
+    for (payment in tx_data.gasData.payment.vals()) {
+      serializeObjectRef(buffer, payment);
+    };
+    serializeAddress(buffer, tx_data.gasData.owner);
+    serializeU64(buffer, tx_data.gasData.price);
+    serializeU64(buffer, tx_data.gasData.budget);
+
+    // 4. Expiration
+    switch (tx_data.expiration) {
+      case (#None) {
+        buffer.add(0); // Tag for None
+      };
+      case (#Epoch(epoch)) {
+        buffer.add(1); // Tag for Epoch
+        serializeU64(buffer, epoch);
+      };
+    };
+
+    Buffer.toArray(buffer)
+  };
+
+  // Helper functions for BCS serialization
+  private func serializeULEB128(buffer: Buffer.Buffer<Nat8>, value: Nat) {
+    var val = value;
+    while (val >= 128) {
+      buffer.add(Nat8.fromNat((val % 128) + 128));
+      val := val / 128;
+    };
+    buffer.add(Nat8.fromNat(val));
+  };
+
+  private func serializeU64(buffer: Buffer.Buffer<Nat8>, value: Nat64) {
+    let val = Nat64.toNat(value);
+    buffer.add(Nat8.fromNat(val % 256));
+    buffer.add(Nat8.fromNat((val / 256) % 256));
+    buffer.add(Nat8.fromNat((val / 65536) % 256));
+    buffer.add(Nat8.fromNat((val / 16777216) % 256));
+    buffer.add(Nat8.fromNat((val / 4294967296) % 256));
+    buffer.add(Nat8.fromNat((val / 1099511627776) % 256));
+    buffer.add(Nat8.fromNat((val / 281474976710656) % 256));
+    buffer.add(Nat8.fromNat((val / 72057594037927936) % 256));
+  };
+
+  private func serializeString(buffer: Buffer.Buffer<Nat8>, str: Text) {
+    let bytes = Text.encodeUtf8(str);
+    let size = bytes.size();
+    serializeULEB128(buffer, size);
+    for (byte in bytes.vals()) {
+      buffer.add(byte);
+    };
+  };
+
+  private func serializeAddress(buffer: Buffer.Buffer<Nat8>, address: Text) {
+    let hex = if (Text.startsWith(address, #text("0x"))) {
+      Text.stripStart(address, #text("0x"))
+    } else {
+      ?address
+    };
+    switch (hex) {
+      case (?h) {
+        let bytes = hexToBytes(h);
+        // Ensure 32 bytes (pad with zeros if needed)
+        let padding_needed = 32 - bytes.size();
+        for (i in Iter.range(0, padding_needed - 1)) {
+          buffer.add(0);
+        };
+        for (byte in bytes.vals()) {
+          buffer.add(byte);
+        };
+      };
+      case null {
+        // Invalid hex, add 32 zeros
+        for (i in Iter.range(0, 31)) {
+          buffer.add(0);
+        };
+      };
+    };
+  };
+
+  private func serializeObjectRef(buffer: Buffer.Buffer<Nat8>, obj_ref: ObjectRef) {
+    serializeAddress(buffer, obj_ref.objectId);
+    serializeU64(buffer, obj_ref.version);
+
+    // Digest - assuming it's base64 or hex encoded
+    let digest_bytes = if (Text.startsWith(obj_ref.digest, #text("0x"))) {
+      switch (Text.stripStart(obj_ref.digest, #text("0x"))) {
+        case (?hex) { hexToBytes(hex) };
+        case null { [] };
+      }
+    } else {
+      // Assume base64 encoded digest
+      []  // TODO: implement base64 decode
+    };
+
+    // Ensure 32 bytes for digest
+    let padding_needed = 32 - digest_bytes.size();
+    for (i in Iter.range(0, padding_needed - 1)) {
+      buffer.add(0);
+    };
+    for (byte in digest_bytes.vals()) {
+      buffer.add(byte);
+    };
+  };
+
+  private func serializeCallArg(buffer: Buffer.Buffer<Nat8>, arg: CallArg) {
+    switch (arg) {
+      case (#Pure(data)) {
+        buffer.add(0); // Tag for Pure
+        serializeULEB128(buffer, data.size());
+        for (byte in data.vals()) {
+          buffer.add(byte);
+        };
+      };
+      case (#Object(obj_ref)) {
+        buffer.add(1); // Tag for Object
+        serializeObjectRef(buffer, obj_ref);
+      };
+      case (#ObjVec(obj_refs)) {
+        buffer.add(2); // Tag for ObjVec
+        serializeULEB128(buffer, obj_refs.size());
+        for (obj_ref in obj_refs.vals()) {
+          serializeObjectRef(buffer, obj_ref);
+        };
+      };
+    };
+  };
+
+  private func hexToBytes(hex: Text) : [Nat8] {
+    let chars = Text.toArray(hex);
+    let bytes = Buffer.Buffer<Nat8>(0);
+    var i = 0;
+    while (i < chars.size() - 1) {
+      let high = hexCharToNat(chars[i]);
+      let low = hexCharToNat(chars[i + 1]);
+      bytes.add(Nat8.fromNat(high * 16 + low));
+      i += 2;
+    };
+    Buffer.toArray(bytes)
+  };
+
+  private func hexCharToNat(c: Char) : Nat {
+    if (c >= '0' and c <= '9') {
+      Nat32.toNat(Char.toNat32(c) - Char.toNat32('0'))
+    } else if (c >= 'a' and c <= 'f') {
+      Nat32.toNat(Char.toNat32(c) - Char.toNat32('a')) + 10
+    } else if (c >= 'A' and c <= 'F') {
+      Nat32.toNat(Char.toNat32(c) - Char.toNat32('A')) + 10
+    } else {
+      0
+    }
   };
 }

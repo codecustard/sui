@@ -211,12 +211,12 @@ module {
     // Add coin object as input
     let coinArg = #Object(coinObjectRef);
 
-    // Add amount as pure input (placeholder - will need proper BCS encoding)
-    let amountBytes = []; // TODO: Implement BCS encoding for Nat64
+    // Add amount as pure input with proper BCS encoding
+    let amountBytes = encodeU64ToBCS(amount);
     let amountArg = #Pure(amountBytes);
 
-    // Add recipient as pure input (placeholder - will need proper BCS encoding)
-    let recipientBytes = []; // TODO: Implement BCS encoding for address
+    // Add recipient as pure input with proper BCS encoding
+    let recipientBytes = encodeAddressToBCS(recipient);
     let recipientArg = #Pure(recipientBytes);
 
     // Call the SUI transfer function
@@ -251,9 +251,9 @@ module {
     // Add coin object as input
     let coinArg = #Object(coinObjectRef);
 
-    // Convert amounts to CallArgs (placeholder - will need proper BCS encoding)
-    let amountArgs = Array.map<Nat64, CallArg>(amounts, func(_amount) {
-      #Pure([]) // TODO: Implement BCS encoding for Nat64
+    // Convert amounts to CallArgs with proper BCS encoding
+    let amountArgs = Array.map<Nat64, CallArg>(amounts, func(amount) {
+      #Pure(encodeU64ToBCS(amount))
     });
 
     // Add split command
@@ -291,21 +291,39 @@ module {
     builder.build(sender, gasData)
   };
 
-  // Sign transaction data (placeholder)
+  /// Sign transaction data using ICP threshold ECDSA.
+  ///
+  /// NOTE: This function is deprecated. For actual transaction signing,
+  /// use the Wallet class from the wallet.mo module, which provides
+  /// proper integration with ICP's threshold ECDSA and SUI network.
+  ///
+  /// Example:
+  /// ```motoko
+  /// import Wallet "wallet";
+  ///
+  /// let wallet = Wallet.createDevnetWallet("test_key_1");
+  /// let signature = await wallet.signTransaction(tx_data, ?"0");
+  /// ```
+  ///
+  /// @param transactionData The transaction data to sign
+  /// @param _privateKey Unused - kept for API compatibility
+  /// @param _publicKey Unused - kept for API compatibility
+  /// @return Error directing to use Wallet class
   public func signTransaction(
     transactionData : TransactionData,
     _privateKey : [Nat8],
     _publicKey : [Nat8]
   ) : Result.Result<Transaction, Text> {
-    let signature = "placeholder_signature";
-
-    #ok({
-      data = transactionData;
-      txSignatures = [signature];
-    })
+    #err("signTransaction is deprecated. Use Wallet.signTransaction() from wallet.mo for proper ICP threshold ECDSA signing.")
   };
 
-  // Verify transaction signature (placeholder)
+  /// Verify transaction signature.
+  ///
+  /// NOTE: Basic verification only. For production use, implement
+  /// proper ECDSA signature verification with secp256k1.
+  ///
+  /// @param transaction The transaction to verify
+  /// @return True if transaction has at least one signature
   public func verifyTransaction(transaction : Transaction) : Bool {
     transaction.txSignatures.size() > 0
   };
@@ -493,7 +511,7 @@ module {
     serializeAddress(buffer, obj_ref.objectId);
     serializeU64(buffer, obj_ref.version);
 
-    // Digest - assuming it's base64 or hex encoded
+    // Digest - can be base64 or hex encoded
     let digest_bytes = if (Text.startsWith(obj_ref.digest, #text("0x"))) {
       switch (Text.stripStart(obj_ref.digest, #text("0x"))) {
         case (?hex) { hexToBytes(hex) };
@@ -501,11 +519,11 @@ module {
       }
     } else {
       // Assume base64 encoded digest
-      []  // TODO: implement base64 decode
+      decodeBase64ToBytes(obj_ref.digest)
     };
 
     // Ensure 32 bytes for digest
-    let padding_needed = 32 - digest_bytes.size();
+    let padding_needed = if (digest_bytes.size() >= 32) { 0 } else { 32 - digest_bytes.size() };
     for (i in Iter.range(0, padding_needed - 1)) {
       buffer.add(0);
     };
@@ -560,5 +578,95 @@ module {
     } else {
       0
     }
+  };
+
+  /// Encode a Nat64 value to BCS format (little-endian 8 bytes)
+  public func encodeU64ToBCS(value: Nat64) : [Nat8] {
+    let val = Nat64.toNat(value);
+    [
+      Nat8.fromNat(val % 256),
+      Nat8.fromNat((val / 256) % 256),
+      Nat8.fromNat((val / 65536) % 256),
+      Nat8.fromNat((val / 16777216) % 256),
+      Nat8.fromNat((val / 4294967296) % 256),
+      Nat8.fromNat((val / 1099511627776) % 256),
+      Nat8.fromNat((val / 281474976710656) % 256),
+      Nat8.fromNat((val / 72057594037927936) % 256)
+    ]
+  };
+
+  /// Encode a SUI address to BCS format (32 bytes)
+  public func encodeAddressToBCS(address: Text) : [Nat8] {
+    let hex = if (Text.startsWith(address, #text("0x"))) {
+      Text.stripStart(address, #text("0x"))
+    } else {
+      ?address
+    };
+
+    let bytes = switch (hex) {
+      case (?h) { hexToBytes(h) };
+      case null { [] };
+    };
+
+    // Ensure 32 bytes (pad with leading zeros if needed)
+    let buffer = Buffer.Buffer<Nat8>(32);
+    let padding_needed = if (bytes.size() >= 32) { 0 } else { 32 - bytes.size() };
+
+    for (i in Iter.range(0, padding_needed - 1)) {
+      buffer.add(0);
+    };
+    for (byte in bytes.vals()) {
+      buffer.add(byte);
+    };
+
+    Buffer.toArray(buffer)
+  };
+
+  /// Decode base64 string to bytes
+  public func decodeBase64ToBytes(b64: Text) : [Nat8] {
+    // Simple base64 decoder for standard base64
+    let chars = Text.toArray(b64);
+    let result = Buffer.Buffer<Nat8>(0);
+
+    // Base64 character to value mapping
+    func base64CharToValue(c: Char) : ?Nat8 {
+      if (c >= 'A' and c <= 'Z') {
+        ?Nat8.fromNat(Nat32.toNat(Char.toNat32(c) - Char.toNat32('A')))
+      } else if (c >= 'a' and c <= 'z') {
+        ?Nat8.fromNat(Nat32.toNat(Char.toNat32(c) - Char.toNat32('a')) + 26)
+      } else if (c >= '0' and c <= '9') {
+        ?Nat8.fromNat(Nat32.toNat(Char.toNat32(c) - Char.toNat32('0')) + 52)
+      } else if (c == '+') {
+        ?62
+      } else if (c == '/') {
+        ?63
+      } else if (c == '=') {
+        ?0  // Padding
+      } else {
+        null
+      }
+    };
+
+    var i = 0;
+    while (i < chars.size()) {
+      if (i + 3 < chars.size()) {
+        let v1 = switch (base64CharToValue(chars[i])) { case (?v) v; case null 0 };
+        let v2 = switch (base64CharToValue(chars[i+1])) { case (?v) v; case null 0 };
+        let v3 = switch (base64CharToValue(chars[i+2])) { case (?v) v; case null 0 };
+        let v4 = switch (base64CharToValue(chars[i+3])) { case (?v) v; case null 0 };
+
+        // Decode 4 base64 chars to 3 bytes
+        let b1 = (v1 << 2) | (v2 >> 4);
+        let b2 = ((v2 & 0x0F) << 4) | (v3 >> 2);
+        let b3 = ((v3 & 0x03) << 6) | v4;
+
+        result.add(b1);
+        if (chars[i+2] != '=') { result.add(b2) };
+        if (chars[i+3] != '=') { result.add(b3) };
+      };
+      i += 4;
+    };
+
+    Buffer.toArray(result)
   };
 }

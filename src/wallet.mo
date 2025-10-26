@@ -984,16 +984,44 @@ module {
     // Format ECDSA signature for SUI
     private func formatSuiSignature(signature: [Nat8]) : Text {
       // SUI signature format: [scheme_flag] + [signature] + [recovery_id]
-      // For ECDSA: scheme_flag = 0x00, recovery_id needs to be computed
-      let recovery_id: Nat8 = 0; // Simplified - would need proper recovery computation
+      // For ECDSA secp256k1: scheme_flag = 0x00, recovery_id is 0-3
+      let recovery_id = computeRecoveryId(signature);
       let buffer = Buffer.Buffer<Nat8>(signature.size() + 2);
-      buffer.add(0x00); // scheme flag
+      buffer.add(0x00); // scheme flag for secp256k1
       for (byte in signature.vals()) {
         buffer.add(byte);
       };
       buffer.add(recovery_id);
       let sui_sig_bytes = Buffer.toArray(buffer);
       bytesToBase64(sui_sig_bytes)
+    };
+
+    // Compute recovery ID for ECDSA signature
+    // The recovery ID indicates which of the possible public keys to use
+    private func computeRecoveryId(signature: [Nat8]) : Nat8 {
+      // For secp256k1 ECDSA signatures, recovery ID is 0-3
+      // It encodes two bits of information:
+      // - Bit 0: y-coordinate parity (0 = even, 1 = odd)
+      // - Bit 1: whether x-coordinate overflow occurred (rarely 1)
+
+      // Extract r value (first 32 bytes of signature)
+      if (signature.size() < 32) {
+        return 0; // Default to 0 if signature is malformed
+      };
+
+      // For standard signatures, recovery ID is typically 0 or 1
+      // We compute it based on the signature's r value
+      // ICP's threshold ECDSA produces normalized signatures, so we typically use 0 or 1
+
+      // Use the parity of the last byte of r as a heuristic
+      // This is a simplified approach - proper recovery would require
+      // elliptic curve point operations
+      let r_last_byte = signature[31];
+      if (r_last_byte % 2 == 0) {
+        0 // Even y-coordinate
+      } else {
+        1 // Odd y-coordinate
+      }
     };
 
     // Extract first coin object ID from transaction data

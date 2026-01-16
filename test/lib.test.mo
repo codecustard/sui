@@ -1,4 +1,6 @@
 import Debug "mo:base/Debug";
+import Array "mo:base/Array";
+import Nat8 "mo:base/Nat8";
 import Lib "../src/lib";
 import Types "../src/types";
 import Address "../src/address";
@@ -102,24 +104,24 @@ assert moveCallTx.sender == validAddress;
 Debug.print("✅ Move call transaction creation works");
 
 // Test transaction signing (placeholder)
-switch (Transaction.signTransaction(txData, [0x01, 0x02], [0x03, 0x04])) {
+// Use proper 32-byte keys for signing
+let privateKey = Array.tabulate<Nat8>(32, func(i) { Nat8.fromNat(i) });
+let publicKey = Array.tabulate<Nat8>(32, func(i) { Nat8.fromNat(i + 32) });
+
+switch (Transaction.signTransaction(txData, privateKey, publicKey)) {
   case (#ok(signedTx)) {
     assert signedTx.data.sender == validAddress;
     assert signedTx.txSignatures.size() > 0;
     Debug.print("✅ Transaction signing works");
+
+    // Test transaction verification with properly signed transaction
+    assert Transaction.verifyTransaction(signedTx) == true;
+    Debug.print("✅ Transaction verification works");
   };
-  case (#err(_)) {
-    assert false; // Should not fail
+  case (#err(msg)) {
+    Debug.print("Signing error: " # msg);
+    assert false; // Should not fail with valid keys
   };
 };
-
-// Test transaction verification
-let sampleTx : Types.Transaction = {
-  data = txData;
-  txSignatures = ["test_signature"];
-};
-
-assert Transaction.verifyTransaction(sampleTx) == true;
-Debug.print("✅ Transaction verification works");
 
 Debug.print("🎉 All tests passed! SUI library is working correctly.");

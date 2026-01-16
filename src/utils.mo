@@ -8,6 +8,7 @@ import Text "mo:base/Text";
 import Iter "mo:base/Iter";
 import Char "mo:base/Char";
 import Hex "mo:hex";
+import BaseX "mo:base-x-encoder";
 
 module {
   /// Convert text to uppercase.
@@ -178,6 +179,43 @@ module {
     switch (Hex.toArray(hex)) {
       case (#ok(bytes)) ?bytes;
       case (#err(_)) null;
+    }
+  };
+
+  /// Encode byte array to Base64 string.
+  ///
+  /// Converts an array of bytes to a Base64 encoded string.
+  ///
+  /// Example:
+  /// ```motoko
+  /// let bytes : [Nat8] = [72, 101, 108, 108, 111]; // "Hello"
+  /// let base64 = Utils.encodeBase64(bytes);
+  /// // base64 == "SGVsbG8="
+  /// ```
+  ///
+  /// @param bytes The byte array to encode
+  /// @return Base64 encoded string
+  public func encodeBase64(bytes : [Nat8]) : Text {
+    BaseX.toBase64(bytes.vals(), #standard({ includePadding = true }))
+  };
+
+  /// Decode Base64 string to byte array.
+  ///
+  /// Converts a Base64 encoded string to an array of bytes.
+  ///
+  /// Example:
+  /// ```motoko
+  /// let base64 = "SGVsbG8=";
+  /// let bytes = Utils.decodeBase64(base64);
+  /// // bytes == [72, 101, 108, 108, 111] // "Hello"
+  /// ```
+  ///
+  /// @param base64 The Base64 string to decode
+  /// @return Decoded byte array
+  public func decodeBase64(base64 : Text) : [Nat8] {
+    switch (BaseX.fromBase64(base64)) {
+      case (#ok(bytes)) bytes;
+      case (#err(_)) [];
     }
   };
 }

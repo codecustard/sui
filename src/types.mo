@@ -38,10 +38,30 @@ module {
     digest: Text;
   };
 
+  // SUI SDK CallArg - for transaction inputs
   public type CallArg = {
+    #Pure: [Nat8];           // SUI SDK: Pure with bytes
+    #Object: ObjectRef;      // SUI SDK: Object with ObjectArg
+  };
+
+  // SUI SDK Argument - for command arguments
+  public type Argument = {
+    #GasCoin: ();           // SUI SDK: GasCoin: null
+    #Input: Nat;            // SUI SDK: Input: bcs.u16()
+    #Result: Nat;           // SUI SDK: Result: bcs.u16()
+    #NestedResult: (Nat, Nat); // SUI SDK: NestedResult: bcs.tuple([u16, u16])
+  };
+
+  // Legacy type for backward compatibility
+  public type LegacyCallArg = {
     #Pure: [Nat8];
     #Object: ObjectRef;
     #ObjVec: [ObjectRef];
+    #Result: Nat;
+    #NestedResult: (Nat, Nat);
+    #Receiving: ObjectRef;
+    #UnresolvedPure: [Nat8];
+    #GasCoin: ();
   };
 
   public type GasData = {
@@ -52,24 +72,38 @@ module {
   };
 
   public type Command = {
-    #TransferObjects: {
-      objects: [CallArg];
-      address: CallArg;
-    };
-    #SplitCoins: {
-      coin: CallArg;
-      amounts: [CallArg];
-    };
-    #MergeCoins: {
-      destination: CallArg;
-      sources: [CallArg];
-    };
     #MoveCall: {
       package: ObjectID;
       moduleName: Text;
       functionName: Text;
       typeArguments: [Text];
-      arguments: [CallArg];
+      arguments: [Argument];  // Commands use Argument, not CallArg
+    };
+    #TransferObjects: {
+      objects: [Argument];    // Commands use Argument, not CallArg
+      address: Argument;      // Commands use Argument, not CallArg
+    };
+    #SplitCoins: {
+      coin: Argument;         // Commands use Argument, not CallArg
+      amounts: [Argument];    // Commands use Argument, not CallArg
+    };
+    #MergeCoins: {
+      destination: Argument;  // Commands use Argument, not CallArg
+      sources: [Argument];    // Commands use Argument, not CallArg
+    };
+    #Publish: {
+      modules: [Text];
+      dependencies: [ObjectID];
+    };
+    #MakeMoveVec: {
+      type_: ?Text;
+      elements: [Argument];   // Commands use Argument, not CallArg
+    };
+    #Upgrade: {
+      modules: [Text];
+      dependencies: [ObjectID];
+      package: ObjectID;
+      ticket: Argument;       // Commands use Argument, not CallArg
     };
   };
 
@@ -98,6 +132,25 @@ module {
     txSignatures: [Signature];
   };
 
+  /// Intent for transaction signing.
+  ///
+  /// Based on SUI's Intent structure used for transaction signing.
+  /// The intent specifies what type of data is being signed.
+  public type Intent = {
+    scope: Nat8;     // 0 = TransactionData
+    version: Nat8;   // 0 = current version
+    app_id: Nat8;    // 0 = PersonalMessage
+  };
+
+  /// Intent message wrapper for transaction data.
+  ///
+  /// SUI requires all transaction data to be wrapped in an IntentMessage
+  /// before BCS serialization and signing.
+  public type IntentMessage = {
+    intent: Intent;
+    value: TransactionData;
+  };
+
   public type SignatureScheme = {
     #ED25519;
     #Secp256k1;
@@ -119,13 +172,4 @@ module {
     previousTransaction: TransactionDigest;
   };
 
-  // HTTP request types for outbound calls
-  public type HttpRequestArgs = {
-    url : Text;
-    max_response_bytes: ?Nat64;
-    headers: [{name: Text; value: Text}];
-    body: ?Blob;
-    method: {#get; #head; #post; #put; #patch; #delete};
-    transform: ?{function: {context: Blob; response: {status: Nat; body: Blob; headers: [{name: Text; value: Text}]}} -> {body: Blob; headers: [{name: Text; value: Text}]}; context: Blob};
-  };
 }

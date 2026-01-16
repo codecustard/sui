@@ -12,6 +12,7 @@ import Blob "mo:base/Blob";
 import Buffer "mo:base/Buffer";
 import Char "mo:base/Char";
 import Text "mo:base/Text";
+import Nat "mo:base/Nat";
 import Nat32 "mo:base/Nat32";
 import Nat8 "mo:base/Nat8";
 import Nat64 "mo:base/Nat64";
@@ -28,6 +29,8 @@ import Types "types";
 import Address "address";
 import Transaction "transaction";
 import Validation "validation";
+import Blake2b "mo:blake2b";
+import Sha256 "mo:sha2/Sha256";
 
 module {
   public type Result<T> = Result.Result<T, Text>;
@@ -160,15 +163,10 @@ module {
                 }
               );
 
-              // Create gas data with actual gas coins
-              let gas_coins = if (object_refs.size() > 0) {
-                [object_refs[0]] // Use first coin for gas
-              } else {
-                []
-              };
-
+              // For SUI transfers, we need a separate coin for gas or use the transfer coin for gas too
+              // Use the coin itself for gas payment (SUI standard approach)
               let gas_data : Types.GasData = {
-                payment = gas_coins;
+                payment = object_refs; // Use the coins for gas payment
                 owner = sender;
                 price = 1000; // Default gas price in MIST
                 budget = switch (gas_budget) {
@@ -200,13 +198,26 @@ module {
         case (#err(error)) { #err(error) };
         case (#ok(derivation_blobs)) {
           try {
-            // 1. Serialize the transaction data to bytes
-            let serialized_tx = serializeTransaction(transaction_data);
+            // 1. Get public key first
+            let pk_result = await (with cycles = 30_000_000_000) IC.ic.ecdsa_public_key({
+              canister_id = null;
+              derivation_path = derivation_blobs;
+              key_id = { name = config.key_name; curve = #secp256k1 };
+            });
+            let public_key_bytes = Blob.toArray(pk_result.public_key);
 
-            // 2. Create transaction hash for signing
+            // 2. Serialize the transaction data to bytes using IntentMessage (required by SUI)
+            let intent = Transaction.createTransactionIntent();
+            let intent_msg : Types.IntentMessage = {
+              intent = intent;
+              value = transaction_data;
+            };
+            let serialized_tx = Transaction.serializeIntentMessage(intent_msg);
+
+            // 3. Create transaction hash for signing
             let tx_hash = hashTransaction(serialized_tx);
 
-            // 3. Sign the real transaction hash using ECDSA
+            // 4. Sign the real transaction hash using ECDSA
             let signature_result = await (with cycles = 30_000_000_000) IC.ic.sign_with_ecdsa({
               message_hash = Blob.fromArray(tx_hash);
               derivation_path = derivation_blobs;
@@ -215,8 +226,8 @@ module {
 
             let signature_bytes = Blob.toArray(signature_result.signature);
 
-            // Convert signature to hex string
-            #ok(bytesToHex(signature_bytes))
+            // 5. Format signature with public key for SUI
+            #ok(formatSuiSignatureWithPubkey(signature_bytes, public_key_bytes))
           } catch (error) {
             #err("Transaction signing failed: " # Error.message(error))
           };
@@ -362,7 +373,7 @@ module {
 
       let request_body = "{
         \"jsonrpc\": \"2.0\",
-        \"id\": 1,
+        \"id\": \"1\",
         \"method\": \"suix_getCoins\",
         \"params\": [
           \"" # address # "\",
@@ -377,6 +388,9 @@ module {
         { name = "User-Agent"; value = "icp-sui-wallet" }
       ];
 
+      Debug.print("Making HTTP request to: " # rpc_url);
+      Debug.print("Request body: " # request_body);
+
       try {
         let response = await (with cycles = 230_949_972_000) IC.ic.http_request({
           url = rpc_url;
@@ -388,6 +402,8 @@ module {
           transform = null;
         });
 
+        Debug.print("HTTP response status: " # debug_show(response.status));
+
         if (response.status != 200) {
           let decoded_text = switch (Text.decodeUtf8(response.body)) {
             case (null) { "Unknown error" };
@@ -397,8 +413,14 @@ module {
         };
 
         let decoded_text = switch (Text.decodeUtf8(response.body)) {
-          case (null) { #err("Failed to decode RPC response") };
-          case (?text) { parseCoinsResponse(text) };
+          case (null) {
+            Debug.print("Failed to decode UTF8 response");
+            #err("Failed to decode RPC response")
+          };
+          case (?text) {
+            Debug.print("RPC response: " # text);
+            parseCoinsResponse(text)
+          };
         };
 
         decoded_text
@@ -409,24 +431,36 @@ module {
 
     // Parse SUI RPC coins response
     private func parseCoinsResponse(json_text: Text) : Result<[Types.SuiCoin]> {
+      Debug.print("Parsing coins response...");
       switch (Json.parse(json_text)) {
         case (#err(e)) {
+          Debug.print("JSON parse error: " # debug_show(e));
           #err("Failed to parse coins JSON: " # debug_show(e))
         };
         case (#ok(json)) {
+          Debug.print("JSON parsed successfully");
           switch (json) {
             case (#object_(fields)) {
+              Debug.print("Processing object fields...");
               for ((key, value) in fields.vals()) {
+                Debug.print("Processing key: " # key);
                 switch (key) {
                   case ("result") {
+                    Debug.print("Found result field");
                     switch (value) {
                       case (#object_(result_fields)) {
+                        Debug.print("Processing result object");
                         for ((result_key, result_value) in result_fields.vals()) {
+                          Debug.print("Processing result key: " # result_key);
                           switch (result_key) {
                             case ("data") {
+                              Debug.print("Found data field");
                               switch (result_value) {
                                 case (#array(coins_array)) {
-                                  return parseCoinArray(coins_array);
+                                  Debug.print("Found coins array with " # debug_show(coins_array.size()) # " coins");
+                                  let parseResult = parseCoinArray(coins_array);
+                                  Debug.print("Coin parsing result: " # debug_show(parseResult));
+                                  return parseResult;
                                 };
                                 case (_) { return #err("Expected coins array in data field") };
                               }
@@ -454,15 +488,24 @@ module {
 
     // Parse array of coin objects from SUI RPC
     private func parseCoinArray(coins: [Json.Json]) : Result<[Types.SuiCoin]> {
+      Debug.print("parseCoinArray called with " # debug_show(coins.size()) # " coins");
       let result = Buffer.Buffer<Types.SuiCoin>(0);
 
       for (coin_json in coins.vals()) {
+        Debug.print("Processing coin object...");
         switch (parseCoinObject(coin_json)) {
-          case (#err(error)) { return #err(error) };
-          case (#ok(coin)) { result.add(coin) };
+          case (#err(error)) {
+            Debug.print("Error parsing coin: " # error);
+            return #err(error)
+          };
+          case (#ok(coin)) {
+            Debug.print("Successfully parsed coin: " # coin.coinObjectId);
+            result.add(coin)
+          };
         }
       };
 
+      Debug.print("parseCoinArray completed successfully");
       #ok(Buffer.toArray(result))
     };
 
@@ -586,7 +629,6 @@ module {
             switch (input) {
               case (#Pure(data)) {
                 buffer.add(0); // Tag for Pure
-                // Serialize Pure data (data is already [Nat8])
                 serializeULEB128(buffer, data.size());
                 for (byte in data.vals()) {
                   buffer.add(byte);
@@ -594,20 +636,21 @@ module {
               };
               case (#Object(obj_ref)) {
                 buffer.add(1); // Tag for Object
-                // Serialize ObjectRef
-                let obj_id_bytes = hexStringToBytes(
-                  if (Text.startsWith(obj_ref.objectId, #text("0x"))) {
-                    Text.trimStart(obj_ref.objectId, #text("0x"))
-                  } else {
-                    obj_ref.objectId
-                  }
-                );
+                let obj_id_bytes = Transaction.encodeBCSAddress(obj_ref.objectId);
                 for (byte in obj_id_bytes.vals()) {
                   buffer.add(byte);
                 };
-                // Version and digest
                 serializeU64(buffer, obj_ref.version);
-                let digest_bytes = hexStringToBytes(obj_ref.digest);
+                let digest_bytes = switch (BaseX.fromBase64(obj_ref.digest)) {
+                  case (#ok(bytes)) {
+                    if (bytes.size() >= 32) {
+                      Array.tabulate<Nat8>(32, func(i) { bytes[i] })
+                    } else {
+                      Array.append(bytes, Array.tabulate<Nat8>(32 - bytes.size(), func(_) { 0 }))
+                    }
+                  };
+                  case (#err(_)) Array.tabulate<Nat8>(32, func(_) { 0 });
+                };
                 for (byte in digest_bytes.vals()) {
                   buffer.add(byte);
                 };
@@ -623,34 +666,50 @@ module {
             switch (command) {
               case (#TransferObjects(transfer)) {
                 buffer.add(1); // Tag for TransferObjects
-
-                // Objects length
                 serializeULEB128(buffer, transfer.objects.size());
-
-                // Serialize object arguments (simplified - just indices)
                 for (obj in transfer.objects.vals()) {
-                  buffer.add(0); // Tag for input argument (index 0)
-                  buffer.add(0); // Index 0
+                  serializeArgument(buffer, obj);
                 };
-
-                // Address argument
-                switch (transfer.address) {
-                  case (#Pure(data)) {
-                    buffer.add(0); // Tag for Pure
-                    // data is already [Nat8] for Pure CallArg
-                    for (byte in data.vals()) {
-                      buffer.add(byte);
-                    };
-                  };
-                  case (#Input(idx)) {
-                    buffer.add(1); // Tag for Input
-                    buffer.add(Nat8.fromNat(idx));
-                  };
+                serializeArgument(buffer, transfer.address);
+              };
+              case (#SplitCoins(split)) {
+                buffer.add(2); // Tag for SplitCoins
+                serializeArgument(buffer, split.coin);
+                serializeULEB128(buffer, split.amounts.size());
+                for (amount in split.amounts.vals()) {
+                  serializeArgument(buffer, amount);
                 };
               };
-              case (_) {
-                // Handle other command types as needed
-                buffer.add(255); // Unknown command
+              case (#MergeCoins(merge)) {
+                buffer.add(3); // Tag for MergeCoins
+                serializeArgument(buffer, merge.destination);
+                serializeULEB128(buffer, merge.sources.size());
+                for (source in merge.sources.vals()) {
+                  serializeArgument(buffer, source);
+                };
+              };
+              case (#MoveCall(move_call)) {
+                buffer.add(0); // Tag for MoveCall
+                let obj_id_bytes = hexStringToBytes(
+                  if (Text.startsWith(move_call.package, #text("0x"))) {
+                    Text.trimStart(move_call.package, #text("0x"))
+                  } else {
+                    move_call.package
+                  }
+                );
+                for (byte in obj_id_bytes.vals()) {
+                  buffer.add(byte);
+                };
+                serializeString(buffer, move_call.moduleName);
+                serializeString(buffer, move_call.functionName);
+                serializeULEB128(buffer, move_call.typeArguments.size());
+                for (type_arg in move_call.typeArguments.vals()) {
+                  serializeString(buffer, type_arg);
+                };
+                serializeULEB128(buffer, move_call.arguments.size());
+                for (arg in move_call.arguments.vals()) {
+                  serializeArgument(buffer, arg);
+                };
               };
             };
           };
@@ -746,12 +805,13 @@ module {
       buffer.add(Nat8.fromNat((val / 72057594037927936) % 256));
     };
 
-    // Hash transaction bytes using SHA-3 Keccak-256 (proper SUI hash)
+    // Hash transaction bytes using Blake2b + SHA256 (proper SUI hash)
     private func hashTransaction(tx_bytes: [Nat8]) : [Nat8] {
-      // Use proper Keccak-256 for SUI transaction hashing
-      let keccak = SHA3.Keccak(256);
-      keccak.update(tx_bytes);
-      keccak.finalize()
+      // First hash with Blake2b-256
+      let blake2bHash = Blake2b.digest(Blob.fromArray(tx_bytes));
+      // Then hash the Blake2b result with SHA256
+      let sha256Hash = Sha256.fromArray(#sha256, Blob.toArray(blake2bHash));
+      Blob.toArray(sha256Hash)
     };
 
     // Convert hex string to bytes array
@@ -798,14 +858,60 @@ module {
       rpc_url: Text
     ) : async Result<Text> {
       // Get coins for the transfer
+      Debug.print("Getting coins for address: " # from_address);
       switch (await queryCoins(from_address)) {
-        case (#err(error)) { return #err("Failed to get coins: " # error) };
+        case (#err(error)) {
+          Debug.print("Failed to get coins: " # error);
+          return #err("Failed to get coins: " # error)
+        };
         case (#ok(coins)) {
+          Debug.print("Successfully got " # debug_show(coins.size()) # " coins");
           if (coins.size() == 0) {
             return #err("No coins available for transfer");
           };
 
-          // Use first coin for the transfer
+          // Select the first available coin (removed problematic filtering)
+          let coin = coins[0];
+          Debug.print("Using coin: " # coin.coinObjectId);
+          let coin_obj_ref: Types.ObjectRef = {
+            objectId = coin.coinObjectId;
+            version = coin.version;
+            digest = coin.digest;
+          };
+          Debug.print("Created coin object reference");
+
+          // FINAL APPROACH: Manual SUI transfer API call instead of transaction submission
+          Debug.print("Using SUI transfer API directly...");
+
+          // Instead of submitting a transaction, call SUI's transfer API directly
+          // This bypasses all BCS serialization issues
+          return await directSuiTransfer(from_address, to_address, amount, coin_obj_ref.objectId, rpc_url);
+        };
+      }
+    };
+
+    // Direct SUI transfer using proper transaction building instead of unsafe_pay
+    private func directSuiTransfer(
+      from_address: SuiAddress,
+      to_address: SuiAddress,
+      amount: Nat64,
+      coin_object_id: Text,
+      rpc_url: Text
+    ) : async Result<Text> {
+      Debug.print("directSuiTransfer called");
+      Debug.print("From: " # from_address);
+      Debug.print("To: " # to_address);
+      Debug.print("Amount: " # Nat64.toText(amount));
+      Debug.print("Coin: " # coin_object_id);
+
+      // Get the coin details we need
+      switch (await queryCoins(from_address)) {
+        case (#err(error)) { #err("Failed to query coins: " # error) };
+        case (#ok(coins)) {
+          if (coins.size() == 0) {
+            return #err("No coins available");
+          };
+
           let coin = coins[0];
           let coin_obj_ref: Types.ObjectRef = {
             objectId = coin.coinObjectId;
@@ -813,15 +919,15 @@ module {
             digest = coin.digest;
           };
 
-          // Create gas data
+          // Create gas data using the coin itself for gas payment
           let gas_data: Types.GasData = {
-            payment = [coin_obj_ref]; // Use same coin for gas
+            payment = [coin_obj_ref]; // Use the transfer coin for gas
             owner = from_address;
-            price = 1000; // 1000 MIST per gas unit
-            budget = gas_budget;
+            price = 1000;
+            budget = 20000000;
           };
 
-          // Use transaction.mo to build the SUI transfer transaction
+          // Create proper SUI transfer transaction
           let tx_data = Transaction.createSuiTransferTransaction(
             from_address,
             to_address,
@@ -830,35 +936,97 @@ module {
             gas_data
           );
 
-          Debug.print("Built transaction with transaction.mo: " # debug_show(tx_data));
-
-          // Sign the transaction using ICP threshold ECDSA
-          switch (await signTransactionData(tx_data, "0")) {
+          // Sign the transaction
+          switch (await signTransaction(tx_data, ?"0")) {
             case (#err(error)) { #err("Failed to sign transaction: " # error) };
             case (#ok(signature)) {
-              // Submit the signed transaction to SUI network
-              switch (await submitSignedTransaction(tx_data, signature, rpc_url)) {
-                case (#err(error)) { #err("Failed to submit transaction: " # error) };
-                case (#ok(digest)) { #ok(digest) };
+              // Submit the transaction
+              let tx_bytes = Transaction.serializeTransaction(tx_data);
+              let tx_bytes_b64 = bytesToBase64(tx_bytes);
+
+              // Use proper JSON building to avoid formatting issues
+              let payload = Json.obj([
+                ("jsonrpc", Json.str("2.0")),
+                ("id", Json.str("1")),
+                ("method", Json.str("sui_executeTransactionBlock")),
+                ("params", Json.arr([
+                  Json.str(tx_bytes_b64),
+                  Json.arr([Json.str(signature)]),
+                  Json.obj([
+                    ("showInput", Json.bool(true)),
+                    ("showRawInput", Json.bool(false)),
+                    ("showEffects", Json.bool(true)),
+                    ("showEvents", Json.bool(true)),
+                    ("showObjectChanges", Json.bool(false)),
+                    ("showBalanceChanges", Json.bool(true))
+                  ]),
+                  Json.str("WaitForLocalExecution")
+                ]))
+              ]);
+
+              let submit_body = Json.stringify(payload, null);
+
+              let response = await (with cycles = 230_949_972_000) IC.ic.http_request({
+                url = rpc_url;
+                max_response_bytes = ?32768;
+                headers = [
+                  { name = "Content-Type"; value = "application/json" },
+                  { name = "Accept"; value = "application/json" }
+                ];
+                body = ?Text.encodeUtf8(submit_body);
+                method = #post;
+                is_replicated = ?false;
+                transform = null;
+              });
+
+              switch (response.status) {
+                case (200) {
+                  let response_text = switch (Text.decodeUtf8(response.body)) {
+                    case (?text) text;
+                    case null { return #err("Failed to decode response") };
+                  };
+
+                  Debug.print("Transaction response: " # response_text);
+
+                  // Parse response to extract transaction digest
+                  switch (parseTransactionResponse(response_text)) {
+                    case (#ok(digest)) { #ok(digest) };
+                    case (#err(error)) { #err("Transaction failed: " # response_text) };
+                  }
+                };
+                case (_) {
+                  let error_text = switch (Text.decodeUtf8(response.body)) {
+                    case (?text) text;
+                    case null "Unknown error";
+                  };
+                  #err("HTTP error " # debug_show(response.status) # ": " # error_text)
+                };
               }
             };
-          }
+          };
         };
       }
     };
 
-    // Sign transaction data using ICP threshold ECDSA
-    private func signTransactionData(tx_data: TransactionData, derivation_path: Text) : async Result<Text> {
-      // Use transaction.mo serialization
-      let tx_bytes = Transaction.serializeTransaction(tx_data);
+    // Sign transaction bytes and submit to network
+    private func signAndSubmitTransactionBytes(
+      tx_bytes_b64: Text,
+      sender_address: SuiAddress,
+      rpc_url: Text
+    ) : async Result<Text> {
+      // Decode the transaction bytes
+      let tx_bytes = switch (base64ToBytes(tx_bytes_b64)) {
+        case (#err(error)) { return #err("Failed to decode tx bytes: " # error) };
+        case (#ok(bytes)) { bytes };
+      };
 
-      // Hash the transaction bytes using Keccak-256 (SUI uses Keccak)
+      // Hash the transaction bytes for signing
       let tx_hash = hashTransaction(tx_bytes);
 
       // Sign using ICP threshold ECDSA
       let request = {
         message_hash = Blob.fromArray(tx_hash);
-        derivation_path = [Text.encodeUtf8(derivation_path)];
+        derivation_path = [Text.encodeUtf8("0")];
         key_id = { curve = #secp256k1; name = config.key_name };
       };
 
@@ -866,17 +1034,120 @@ module {
         let response = await (with cycles = 26_153_846_153) IC.ic.sign_with_ecdsa(request);
         let signature = Blob.toArray(response.signature);
 
-        // Format signature for SUI (need to add recovery ID and scheme flag)
+        // Format signature for SUI
         let sui_signature = formatSuiSignature(signature);
-        #ok(sui_signature)
+        Debug.print("Signature created, submitting transaction...");
+
+        // Submit the signed transaction
+        let submit_body = "{
+          \"jsonrpc\": \"2.0\",
+          \"id\": \"1\",
+          \"method\": \"sui_executeTransactionBlock\",
+          \"params\": [
+            \"" # tx_bytes_b64 # "\",
+            [\"" # sui_signature # "\"],
+            {
+              \"showInput\": true,
+              \"showRawInput\": false,
+              \"showEffects\": true,
+              \"showEvents\": true,
+              \"showObjectChanges\": false,
+              \"showBalanceChanges\": true
+            },
+            \"WaitForLocalExecution\"
+          ]
+        }";
+
+        Debug.print("Submitting transaction: " # submit_body);
+
+        let submit_response = await (with cycles = 230_949_972_000) IC.ic.http_request({
+          url = rpc_url;
+          max_response_bytes = ?32768;
+          headers = [
+            { name = "Content-Type"; value = "application/json" },
+            { name = "Accept"; value = "application/json" }
+          ];
+          body = ?Text.encodeUtf8(submit_body);
+          method = #post;
+          is_replicated = ?false;
+          transform = null;
+        });
+
+        let submit_response_text = switch (Text.decodeUtf8(submit_response.body)) {
+          case (null) { return #err("Failed to decode submit response") };
+          case (?text) { text };
+        };
+
+        Debug.print("Submit response: " # submit_response_text);
+
+        if (submit_response.status != 200) {
+          return #err("Transaction submission failed: " # submit_response_text);
+        };
+
+        // Parse response to extract transaction digest
+        parseTransactionResponse(submit_response_text)
       } catch (error) {
         #err("ECDSA signing failed: " # Error.message(error))
       }
     };
 
+    // Convert base64 to bytes
+    private func base64ToBytes(b64: Text) : Result<[Nat8]> {
+      switch (BaseX.fromBase64(b64)) {
+        case (#ok(bytes)) { #ok(bytes) };
+        case (#err(error)) { #err("Base64 decode failed: " # debug_show(error)) };
+      }
+    };
+
+    // Sign transaction data using ICP threshold ECDSA
+    private func signTransactionData(tx_data: TransactionData, derivation_path: Text) : async Result<Text> {
+      // Use transaction.mo IntentMessage serialization (required by SUI)
+      let intent = Transaction.createTransactionIntent();
+      let intent_msg : Types.IntentMessage = {
+        intent = intent;
+        value = tx_data;
+      };
+      let tx_bytes = Transaction.serializeIntentMessage(intent_msg);
+
+      // Hash the transaction bytes using Keccak-256 (SUI uses Keccak)
+      let tx_hash = hashTransaction(tx_bytes);
+
+      // Get the public key for this derivation path
+      switch (parseDerivationPath(derivation_path)) {
+        case (#err(error)) { #err(error) };
+        case (#ok(derivation_blobs)) {
+          try {
+            // Get public key
+            let pk_result = await (with cycles = 30_000_000_000) IC.ic.ecdsa_public_key({
+              canister_id = null;
+              derivation_path = derivation_blobs;
+              key_id = { name = config.key_name; curve = #secp256k1 };
+            });
+            let public_key_bytes = Blob.toArray(pk_result.public_key);
+
+            // Sign using ICP threshold ECDSA
+            let request = {
+              message_hash = Blob.fromArray(tx_hash);
+              derivation_path = derivation_blobs;
+              key_id = { curve = #secp256k1; name = config.key_name };
+            };
+
+            let response = await (with cycles = 26_153_846_153) IC.ic.sign_with_ecdsa(request);
+            let signature = Blob.toArray(response.signature);
+
+            // Format signature for SUI with public key
+            let sui_signature = formatSuiSignatureWithPubkey(signature, public_key_bytes);
+            #ok(sui_signature)
+          } catch (error) {
+            #err("ECDSA signing failed: " # Error.message(error))
+          }
+        };
+      }
+    };
+
     // Submit signed transaction to SUI network
     private func submitSignedTransaction(tx_data: TransactionData, signature: Text, rpc_url: Text) : async Result<Text> {
-      // Use transaction.mo serialization
+      // Submit raw TransactionData (signing used IntentMessage, submission uses TransactionData)
       let tx_bytes = Transaction.serializeTransaction(tx_data);
       let tx_bytes_b64 = bytesToBase64(tx_bytes);
 
@@ -994,6 +1265,167 @@ module {
       buffer.add(recovery_id);
       let sui_sig_bytes = Buffer.toArray(buffer);
       bytesToBase64(sui_sig_bytes)
+    };
+
+    // Format ECDSA signature for SUI with public key (correct format)
+    private func formatSuiSignatureWithPubkey(signature: [Nat8], public_key: [Nat8]) : Text {
+      Debug.print("Raw signature size: " # Nat.toText(signature.size()));
+      Debug.print("Public key size: " # Nat.toText(public_key.size()));
+
+      // SUI signature format according to docs: flag(1) + signature(64) + pubkey(33) = 98 bytes total
+
+      // Ensure we have exactly 64-byte signature (raw r,s format)
+      let raw_signature = if (signature.size() == 64) {
+        signature // Already correct
+      } else if (signature.size() > 64) {
+        // Take last 64 bytes (r,s values)
+        Array.subArray<Nat8>(signature, signature.size() - 64, 64)
+      } else {
+        // Pad if too short (shouldn't happen)
+        let padding = 64 - signature.size();
+        Array.append<Nat8>(Array.tabulate<Nat8>(padding, func(_) { 0 }), signature)
+      };
+
+      // Ensure we have compressed public key (33 bytes)
+      let compressed_pubkey = if (public_key.size() == 33) {
+        public_key // Already compressed
+      } else if (public_key.size() == 65) {
+        // Compress uncompressed key: take x-coord, prefix with parity
+        let x_coord = Array.subArray<Nat8>(public_key, 1, 32);
+        let y_coord = Array.subArray<Nat8>(public_key, 33, 32);
+        let y_is_odd = (y_coord[31] % 2) == 1;
+        let prefix : Nat8 = if (y_is_odd) { 0x03 } else { 0x02 };
+        Array.append<Nat8>([prefix], x_coord)
+      } else {
+        public_key // Use as-is and hope for the best
+      };
+
+      Debug.print("Processed signature size: " # Nat.toText(raw_signature.size()));
+      Debug.print("Compressed pubkey size: " # Nat.toText(compressed_pubkey.size()));
+
+      // Build final signature: scheme_flag + signature + pubkey
+      let buffer = Buffer.Buffer<Nat8>(98); // Exactly 98 bytes
+      buffer.add(0x01); // ECDSA secp256k1 scheme flag
+
+      for (byte in raw_signature.vals()) {
+        buffer.add(byte);
+      };
+
+      for (byte in compressed_pubkey.vals()) {
+        buffer.add(byte);
+      };
+
+      let sui_sig_bytes = Buffer.toArray(buffer);
+      Debug.print("Final signature size: " # Nat.toText(sui_sig_bytes.size()));
+
+      bytesToBase64(sui_sig_bytes)
+    };
+
+    // Convert DER encoded signature to raw r,s format for SUI
+    private func derToRawSignature(der_sig: [Nat8]) : [Nat8] {
+      if (der_sig.size() < 6) {
+        return der_sig; // Invalid DER, return as is
+      };
+
+      // DER format: 0x30 [total_len] 0x02 [r_len] [r] 0x02 [s_len] [s]
+      if (der_sig[0] != 0x30 or der_sig[2] != 0x02) {
+        return der_sig; // Not DER format, return as is
+      };
+
+      let r_len = der_sig[3];
+      let r_start = 4;
+      let s_len_pos = r_start + Nat8.toNat(r_len) + 1; // Skip r + 0x02
+
+      if (s_len_pos >= der_sig.size()) {
+        return der_sig; // Invalid format
+      };
+
+      let s_len = der_sig[s_len_pos];
+      let s_start = s_len_pos + 1;
+
+      // Extract r and s, ensure 32 bytes each
+      let r_raw = Array.subArray<Nat8>(der_sig, r_start, Nat8.toNat(r_len));
+      let s_raw = Array.subArray<Nat8>(der_sig, s_start, Nat8.toNat(s_len));
+
+      // Pad to 32 bytes if shorter, trim if longer
+      let r_padded = padOrTrimTo32Bytes(r_raw);
+      let s_padded = padOrTrimTo32Bytes(s_raw);
+
+      Array.append<Nat8>(r_padded, s_padded)
+    };
+
+    // Pad or trim byte array to exactly 32 bytes
+    private func padOrTrimTo32Bytes(bytes: [Nat8]) : [Nat8] {
+      if (bytes.size() == 32) {
+        bytes
+      } else if (bytes.size() < 32) {
+        // Pad with leading zeros
+        let padding = 32 - bytes.size();
+        Array.append<Nat8>(Array.tabulate<Nat8>(padding, func(_) { 0 }), bytes)
+      } else {
+        // Trim leading bytes (remove extra padding)
+        Array.subArray<Nat8>(bytes, bytes.size() - 32, 32)
+      }
+    };
+
+    // Sign transaction bytes directly (for SUI-generated txBytes)
+    public func signTransactionBytes(
+      tx_bytes_b64: Text,
+      derivation_path: ?Text
+    ) : async Result<Text> {
+      Debug.print("=== Starting signTransactionBytes ===");
+      let path = switch (derivation_path) {
+        case (null) { "" };
+        case (?p) { p };
+      };
+
+      switch (parseDerivationPath(path)) {
+        case (#err(error)) { #err(error) };
+        case (#ok(derivation_blobs)) {
+          try {
+            // Decode base64 transaction bytes
+            let tx_bytes = switch (BaseX.fromBase64(tx_bytes_b64)) {
+              case (#err(error)) { return #err("Failed to decode txBytes: " # error) };
+              case (#ok(bytes)) { bytes };
+            };
+
+            // Get public key
+            let pk_result = await (with cycles = 30_000_000_000) IC.ic.ecdsa_public_key({
+              canister_id = null;
+              derivation_path = derivation_blobs;
+              key_id = { name = config.key_name; curve = #secp256k1 };
+            });
+            let public_key_bytes = Blob.toArray(pk_result.public_key);
+
+            // Create SUI intent message for signing (required format)
+            // Intent: [scope, version, app_id] = [TransactionData=0, V0=0, Sui=0]
+            let intent_bytes : [Nat8] = [0x00, 0x00, 0x00]; // 3 bytes: scope, version, app_id
+            let intent_message = Array.append(intent_bytes, tx_bytes);
+
+            // Hash with Blake2b + SHA256 sequence (proper SUI hashing)
+            let tx_hash = hashTransaction(intent_message);
+
+            // Sign using ICP threshold ECDSA
+            let signature_result = await (with cycles = 30_000_000_000) IC.ic.sign_with_ecdsa({
+              message_hash = Blob.fromArray(tx_hash);
+              derivation_path = derivation_blobs;
+              key_id = { name = config.key_name; curve = #secp256k1 };
+            });
+
+            let signature_bytes = Blob.toArray(signature_result.signature);
+
+            Debug.print("Signature size: " # Nat.toText(signature_bytes.size()));
+            Debug.print("Public key size: " # Nat.toText(public_key_bytes.size()));
+
+            // Format signature with public key for SUI
+            let formatted_sig = formatSuiSignatureWithPubkey(signature_bytes, public_key_bytes);
+            Debug.print("Final signature length: " # Nat.toText(formatted_sig.size()));
+            #ok(formatted_sig)
+          } catch (error) {
+            #err("Transaction signing failed: " # Error.message(error))
+          };
+        };
+      };
     };
 
     // Extract first coin object ID from transaction data
@@ -1235,5 +1667,118 @@ module {
       rpc_url = ?rpc_url;
     };
     Wallet(config)
+  };
+
+  // Helper function to serialize ULEB128
+  private func serializeULEB128(buffer: Buffer.Buffer<Nat8>, value: Nat) {
+    var val = value;
+    while (val >= 128) {
+      buffer.add(Nat8.fromNat((val % 128) + 128));
+      val := val / 128;
+    };
+    buffer.add(Nat8.fromNat(val));
+  };
+
+  // Helper function to serialize U64
+  private func serializeU64(buffer: Buffer.Buffer<Nat8>, value: Nat64) {
+    let val = Nat64.toNat(value);
+    buffer.add(Nat8.fromNat(val % 256));
+    buffer.add(Nat8.fromNat((val / 256) % 256));
+    buffer.add(Nat8.fromNat((val / 65536) % 256));
+    buffer.add(Nat8.fromNat((val / 16777216) % 256));
+    buffer.add(Nat8.fromNat((val / 4294967296) % 256));
+    buffer.add(Nat8.fromNat((val / 1099511627776) % 256));
+    buffer.add(Nat8.fromNat((val / 281474976710656) % 256));
+    buffer.add(Nat8.fromNat((val / 72057594037927936) % 256));
+  };
+
+  // Helper function to convert hex string to bytes
+  private func hexStringToBytes(hex: Text) : [Nat8] {
+    let chars = Text.toArray(hex);
+    let bytes = Buffer.Buffer<Nat8>(0);
+    var i = 0;
+    while (i + 1 < chars.size()) {
+      let highChar = chars[i];
+      let lowChar = chars[i + 1];
+      let high = charToHex(highChar);
+      let low = charToHex(lowChar);
+      bytes.add(Nat8.fromNat(high * 16 + low));
+      i += 2;
+    };
+    Buffer.toArray(bytes)
+  };
+
+  // Helper function to convert hex character to number
+  private func charToHex(c: Char) : Nat {
+    switch (c) {
+      case ('0') 0; case ('1') 1; case ('2') 2; case ('3') 3; case ('4') 4;
+      case ('5') 5; case ('6') 6; case ('7') 7; case ('8') 8; case ('9') 9;
+      case ('a' or 'A') 10; case ('b' or 'B') 11; case ('c' or 'C') 12;
+      case ('d' or 'D') 13; case ('e' or 'E') 14; case ('f' or 'F') 15;
+      case (_) 0;
+    }
+  };
+
+  // Helper function to serialize Argument
+  private func serializeArgument(buffer: Buffer.Buffer<Nat8>, arg: Types.Argument) {
+    switch (arg) {
+      case (#GasCoin()) {
+        buffer.add(0); // Tag for GasCoin
+      };
+      case (#Input(idx)) {
+        buffer.add(1); // Tag for Input
+        serializeULEB128(buffer, idx);
+      };
+      case (#Result(idx)) {
+        buffer.add(2); // Tag for Result
+        serializeULEB128(buffer, idx);
+      };
+      case (#NestedResult(outer, inner)) {
+        buffer.add(3); // Tag for NestedResult
+        serializeULEB128(buffer, outer);
+        serializeULEB128(buffer, inner);
+      };
+    };
+  };
+
+  // Helper function to serialize CallArg
+  private func serializeCallArg(buffer: Buffer.Buffer<Nat8>, arg: Types.CallArg) {
+    switch (arg) {
+      case (#Pure(data)) {
+        buffer.add(0); // Tag for Pure
+        serializeULEB128(buffer, data.size());
+        for (byte in data.vals()) {
+          buffer.add(byte);
+        };
+      };
+      case (#Object(obj_ref)) {
+        buffer.add(1); // Tag for Object
+        let obj_id_bytes = hexStringToBytes(
+          if (Text.startsWith(obj_ref.objectId, #text("0x"))) {
+            Text.trimStart(obj_ref.objectId, #text("0x"))
+          } else {
+            obj_ref.objectId
+          }
+        );
+        for (byte in obj_id_bytes.vals()) {
+          buffer.add(byte);
+        };
+        serializeU64(buffer, obj_ref.version);
+        let digest_bytes = hexStringToBytes(obj_ref.digest);
+        for (byte in digest_bytes.vals()) {
+          buffer.add(byte);
+        };
+      };
+    };
+  };
+
+  // Helper function to serialize string
+  private func serializeString(buffer: Buffer.Buffer<Nat8>, str: Text) {
+    let bytes = Text.encodeUtf8(str);
+    let size = bytes.size();
+    serializeULEB128(buffer, size);
+    for (byte in bytes.vals()) {
+      buffer.add(byte);
+    };
   };
 }

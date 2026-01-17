@@ -333,6 +333,80 @@ persistent actor SuiExample {
     )
   };
 
+  /// Split a coin into multiple coins with specified amounts
+  ///
+  /// Creates new coins from an existing coin. Useful for preparing coins
+  /// for multiple transfers or airdrops.
+  /// @param ownerAddress - Address that owns the coin
+  /// @param amounts - Array of amounts for each new coin (in MIST)
+  /// @param gasBudget - Maximum gas budget in MIST
+  /// @return Transaction digest on success
+  public func splitCoins(
+    ownerAddress : Text,
+    amounts : [Nat64],
+    gasBudget : Nat64
+  ) : async Result.Result<Text, Text> {
+    let rpcUrl = "https://fullnode.testnet.sui.io:443";
+    let suiWallet = Wallet.createTestnetWallet("dfx_test_key");
+
+    // Get coins for the address
+    let coins = switch (await suiWallet.getBalance(ownerAddress)) {
+      case (#err(e)) { return #err("Failed to get coins: " # e) };
+      case (#ok(balance)) { balance.objects };
+    };
+
+    if (coins.size() == 0) {
+      return #err("No coins available");
+    };
+
+    // Check sufficient balance
+    var totalNeeded : Nat64 = gasBudget;
+    for (amount in amounts.vals()) {
+      totalNeeded += amount;
+    };
+
+    if (coins[0].balance < totalNeeded) {
+      return #err("Insufficient balance. Have: " # Nat64.toText(coins[0].balance) #
+                  " MIST, need: " # Nat64.toText(totalNeeded) # " MIST");
+    };
+
+    let signFunc = func(messageHash : Blob) : async Result.Result<Blob, Text> {
+      try {
+        let response = await (with cycles = 30_000_000_000) IC.ic.sign_with_ecdsa({
+          message_hash = messageHash;
+          derivation_path = [];
+          key_id = { curve = #secp256k1; name = "dfx_test_key" };
+        });
+        #ok(response.signature)
+      } catch (e) {
+        #err("Failed to sign: " # Error.message(e))
+      }
+    };
+
+    let getPublicKeyFunc = func() : async Result.Result<Blob, Text> {
+      try {
+        let response = await (with cycles = 30_000_000_000) IC.ic.ecdsa_public_key({
+          canister_id = null;
+          derivation_path = [];
+          key_id = { curve = #secp256k1; name = "dfx_test_key" };
+        });
+        #ok(response.public_key)
+      } catch (e) {
+        #err("Failed to get public key: " # Error.message(e))
+      }
+    };
+
+    await SuiTransfer.splitCoins(
+      rpcUrl,
+      ownerAddress,
+      coins[0].coinObjectId,
+      amounts,
+      gasBudget,
+      signFunc,
+      getPublicKeyFunc
+    )
+  };
+
   // ============================================
   // TRANSACTION QUERIES
   // ============================================

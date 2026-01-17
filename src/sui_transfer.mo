@@ -967,4 +967,156 @@ module {
 
     writer.toBytes()
   };
+
+  /// Split a coin into multiple coins with specified amounts
+  ///
+  /// @param rpcUrl - SUI RPC endpoint
+  /// @param ownerAddress - Address that owns the coin
+  /// @param coinObjectId - Coin to split (also used for gas)
+  /// @param amounts - Array of amounts for each new coin (in MIST)
+  /// @param gasBudget - Maximum gas budget in MIST
+  /// @return Transaction digest on success
+  public func splitCoins(
+    rpcUrl : Text,
+    ownerAddress : Text,
+    coinObjectId : Text,
+    amounts : [Nat64],
+    gasBudget : Nat64,
+    signFunc : (messageHash : Blob) -> async Result.Result<Blob, Text>,
+    getPublicKeyFunc : () -> async Result.Result<Blob, Text>,
+  ) : async Result.Result<Text, Text> {
+    try {
+      if (amounts.size() == 0) {
+        return #err("No amounts specified for split");
+      };
+
+      // Fetch coin info for gas
+      let coinData = switch (await getObjectInfo(rpcUrl, coinObjectId)) {
+        case (#ok(data)) { data };
+        case (#err(e)) { return #err("Failed to get coin info: " # e) };
+      };
+
+      // Build the split transaction
+      let txBytes = buildSplitTransaction(
+        ownerAddress,
+        coinData,
+        amounts,
+        gasBudget
+      );
+
+      Debug.print("Split transaction bytes: " # Nat.toText(txBytes.size()));
+
+      // Create intent message: intent (3 bytes) + txBytes
+      let intent : [Nat8] = [0, 0, 0];
+      let messageToSign = Array.append(intent, txBytes);
+
+      // Hash with Blake2b-256
+      let messageHashBlob = blake2bHash(messageToSign);
+      let messageHashBytes = Blob.toArray(messageHashBlob);
+
+      // Hash again with SHA256 for signing
+      let finalHashBlob = sha256Hash(messageHashBytes);
+
+      let signature = switch (await signFunc(finalHashBlob)) {
+        case (#ok(sig)) { Blob.toArray(sig) };
+        case (#err(msg)) { return #err("Failed to sign: " # msg) };
+      };
+
+      let publicKey = switch (await getPublicKeyFunc()) {
+        case (#ok(pk)) { Blob.toArray(pk) };
+        case (#err(msg)) { return #err("Failed to get public key: " # msg) };
+      };
+
+      await executeSuiTransaction(rpcUrl, txBytes, signature, publicKey);
+    } catch (e) {
+      #err("Split failed: " # Error.message(e));
+    };
+  };
+
+  /// Build a split coins transaction using BCS
+  private func buildSplitTransaction(
+    ownerAddress : Text,
+    sourceCoin : ObjectRef,
+    amounts : [Nat64],
+    gasBudget : Nat64
+  ) : [Nat8] {
+    let writer = Bcs.newWriter();
+
+    // TransactionData::V1 variant = 0
+    writer.writeULEB(0);
+
+    // === TransactionKind::ProgrammableTransaction = 0 ===
+    writer.writeULEB(0);
+
+    // === ProgrammableTransaction.inputs (Vec<CallArg>) ===
+    // Inputs: amounts (Pure u64) + recipient address (Pure)
+    writer.writeULEB(amounts.size() + 1);
+
+    // Inputs 0..N-1: Pure amounts
+    for (amount in amounts.vals()) {
+      writer.writeULEB(0); // CallArg::Pure variant = 0
+      writer.writeULEB(8); // length of u64
+      writer.write64(amount);
+    };
+
+    // Input N: Pure recipient address (owner gets the split coins)
+    let recipientBytes = addressToBytes(ownerAddress);
+    writer.writeULEB(0); // CallArg::Pure variant = 0
+    writer.writeULEB(32); // length of address
+    writer.writeBytes(recipientBytes);
+
+    // === ProgrammableTransaction.commands (Vec<Command>) ===
+    writer.writeULEB(2); // 2 commands: SplitCoins + TransferObjects
+
+    // Command 0: SplitCoins(coin, amounts)
+    writer.writeULEB(2); // SplitCoins variant = 2
+
+    // coin: Argument::GasCoin (variant 0)
+    writer.writeULEB(0); // Argument::GasCoin
+
+    // amounts: Vec<Argument>
+    writer.writeULEB(amounts.size());
+    for (i in Iter.range(0, amounts.size() - 1)) {
+      writer.writeULEB(1); // Argument::Input variant = 1
+      writer.write16(Nat16.fromNat(i)); // Input index 0, 1, 2, ...
+    };
+
+    // Command 1: TransferObjects(objects, recipient)
+    writer.writeULEB(1); // TransferObjects variant = 1
+
+    // objects: Vec<Argument> - each split coin as NestedResult(0, i)
+    writer.writeULEB(amounts.size());
+    for (i in Iter.range(0, amounts.size() - 1)) {
+      writer.writeULEB(3); // Argument::NestedResult variant = 3
+      writer.write16(0);   // Result index 0 (from SplitCoins)
+      writer.write16(Nat16.fromNat(i)); // Nested index 0, 1, 2, ...
+    };
+
+    // recipient: Argument::Input (last input = address)
+    writer.writeULEB(1); // Argument::Input variant = 1
+    writer.write16(Nat16.fromNat(amounts.size())); // Input index N
+
+    // === sender ===
+    let senderBytes = addressToBytes(ownerAddress);
+    writer.writeBytes(senderBytes);
+
+    // === GasData ===
+    // payment: Vec<ObjectRef>
+    writer.writeULEB(1);
+    serializeObjectRefV2(writer, sourceCoin);
+
+    // owner: SuiAddress
+    writer.writeBytes(senderBytes);
+
+    // price: u64 = 1000
+    writer.write64(1000);
+
+    // budget: u64
+    writer.write64(gasBudget);
+
+    // === expiration: TransactionExpiration::None = 0 ===
+    writer.writeULEB(0);
+
+    writer.toBytes()
+  };
 }

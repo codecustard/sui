@@ -917,16 +917,10 @@ module {
     writer.writeULEB(0);
 
     // === ProgrammableTransaction.inputs (Vec<CallArg>) ===
-    // We need Object inputs for destination and each source
-    let numInputs = 1 + sourceCoins.size(); // destination + sources
-    writer.writeULEB(numInputs);
+    // Only source coins as inputs - destination is the GasCoin
+    writer.writeULEB(sourceCoins.size());
 
-    // Input 0: Object - destination coin (ImmOrOwnedObject)
-    writer.writeULEB(1); // CallArg::Object variant = 1
-    writer.writeULEB(0); // ObjectArg::ImmOrOwnedObject variant = 0
-    serializeObjectRefV2(writer, destCoin);
-
-    // Inputs 1..N: Object - source coins
+    // Inputs 0..N-1: Object - source coins
     for (sourceCoin in sourceCoins.vals()) {
       writer.writeULEB(1); // CallArg::Object variant = 1
       writer.writeULEB(0); // ObjectArg::ImmOrOwnedObject variant = 0
@@ -939,15 +933,15 @@ module {
     // Command 0: MergeCoins(destination, sources)
     writer.writeULEB(3); // MergeCoins variant = 3
 
-    // destination: Argument::Input(0)
-    writer.writeULEB(1); // Argument::Input variant = 1
-    writer.write16(0);   // Input index 0
+    // destination: Argument::GasCoin (variant 0)
+    // The GasCoin is used as the merge destination, avoiding duplicate object reference
+    writer.writeULEB(0); // Argument::GasCoin variant = 0
 
     // sources: Vec<Argument>
     writer.writeULEB(sourceCoins.size()); // number of sources
     for (i in Iter.range(0, sourceCoins.size() - 1)) {
       writer.writeULEB(1); // Argument::Input variant = 1
-      writer.write16(Nat16.fromNat(i + 1)); // Input index 1, 2, 3, ...
+      writer.write16(Nat16.fromNat(i)); // Input index 0, 1, 2, ...
     };
 
     // === sender ===

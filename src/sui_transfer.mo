@@ -2,7 +2,9 @@ import Array "mo:base/Array";
 import Blob "mo:base/Blob";
 import Debug "mo:base/Debug";
 import Error "mo:base/Error";
+import Iter "mo:base/Iter";
 import Nat "mo:base/Nat";
+import Nat16 "mo:base/Nat16";
 import Nat64 "mo:base/Nat64";
 import Result "mo:base/Result";
 import Text "mo:base/Text";
@@ -819,5 +821,156 @@ module {
     } catch (e) {
       #err("Faucet request error: " # Error.message(e))
     };
+  };
+
+  /// Merge multiple coins into one
+  ///
+  /// @param rpcUrl - SUI RPC endpoint URL
+  /// @param ownerAddress - Address that owns the coins
+  /// @param destinationCoinId - Coin to merge into (also used for gas)
+  /// @param sourceCoinIds - Coins to merge from (will be consumed)
+  /// @param gasBudget - Maximum gas budget in MIST
+  /// @param signFunc - Function to sign transaction hash
+  /// @param getPublicKeyFunc - Function to get public key
+  /// @return Transaction digest on success
+  public func mergeCoins(
+    rpcUrl : Text,
+    ownerAddress : Text,
+    destinationCoinId : Text,
+    sourceCoinIds : [Text],
+    gasBudget : Nat64,
+    signFunc : (messageHash : Blob) -> async Result.Result<Blob, Text>,
+    getPublicKeyFunc : () -> async Result.Result<Blob, Text>,
+  ) : async Result.Result<Text, Text> {
+    try {
+      if (sourceCoinIds.size() == 0) {
+        return #err("No source coins to merge");
+      };
+
+      // Fetch destination coin info for gas
+      let destCoinData = switch (await getObjectInfo(rpcUrl, destinationCoinId)) {
+        case (#ok(data)) { data };
+        case (#err(e)) { return #err("Failed to get destination coin info: " # e) };
+      };
+
+      // Fetch source coin info
+      var sourceCoinRefs : [ObjectRef] = [];
+      for (coinId in sourceCoinIds.vals()) {
+        switch (await getObjectInfo(rpcUrl, coinId)) {
+          case (#ok(data)) {
+            sourceCoinRefs := Array.append(sourceCoinRefs, [data]);
+          };
+          case (#err(e)) { return #err("Failed to get source coin info: " # e) };
+        };
+      };
+
+      // Build the merge transaction
+      let txBytes = buildMergeTransaction(
+        ownerAddress,
+        destCoinData,
+        sourceCoinRefs,
+        gasBudget
+      );
+
+      Debug.print("Merge transaction bytes: " # Nat.toText(txBytes.size()));
+
+      // Create intent message: intent (3 bytes) + txBytes
+      let intent : [Nat8] = [0, 0, 0]; // TransactionData intent
+      let messageToSign = Array.append(intent, txBytes);
+
+      // Hash with Blake2b-256
+      let messageHashBlob = blake2bHash(messageToSign);
+      let messageHashBytes = Blob.toArray(messageHashBlob);
+
+      // Hash again with SHA256 for signing
+      let finalHashBlob = sha256Hash(messageHashBytes);
+
+      let signature = switch (await signFunc(finalHashBlob)) {
+        case (#ok(sig)) { Blob.toArray(sig) };
+        case (#err(msg)) { return #err("Failed to sign: " # msg) };
+      };
+
+      let publicKey = switch (await getPublicKeyFunc()) {
+        case (#ok(pk)) { Blob.toArray(pk) };
+        case (#err(msg)) { return #err("Failed to get public key: " # msg) };
+      };
+
+      await executeSuiTransaction(rpcUrl, txBytes, signature, publicKey);
+    } catch (e) {
+      #err("Merge failed: " # Error.message(e));
+    };
+  };
+
+  /// Build a merge coins transaction using BCS
+  private func buildMergeTransaction(
+    ownerAddress : Text,
+    destCoin : ObjectRef,
+    sourceCoins : [ObjectRef],
+    gasBudget : Nat64
+  ) : [Nat8] {
+    let writer = Bcs.newWriter();
+
+    // TransactionData::V1 variant = 0
+    writer.writeULEB(0);
+
+    // === TransactionKind::ProgrammableTransaction = 0 ===
+    writer.writeULEB(0);
+
+    // === ProgrammableTransaction.inputs (Vec<CallArg>) ===
+    // We need Object inputs for destination and each source
+    let numInputs = 1 + sourceCoins.size(); // destination + sources
+    writer.writeULEB(numInputs);
+
+    // Input 0: Object - destination coin (ImmOrOwnedObject)
+    writer.writeULEB(1); // CallArg::Object variant = 1
+    writer.writeULEB(0); // ObjectArg::ImmOrOwnedObject variant = 0
+    serializeObjectRefV2(writer, destCoin);
+
+    // Inputs 1..N: Object - source coins
+    for (sourceCoin in sourceCoins.vals()) {
+      writer.writeULEB(1); // CallArg::Object variant = 1
+      writer.writeULEB(0); // ObjectArg::ImmOrOwnedObject variant = 0
+      serializeObjectRefV2(writer, sourceCoin);
+    };
+
+    // === ProgrammableTransaction.commands (Vec<Command>) ===
+    writer.writeULEB(1); // 1 command
+
+    // Command 0: MergeCoins(destination, sources)
+    writer.writeULEB(3); // MergeCoins variant = 3
+
+    // destination: Argument::Input(0)
+    writer.writeULEB(1); // Argument::Input variant = 1
+    writer.write16(0);   // Input index 0
+
+    // sources: Vec<Argument>
+    writer.writeULEB(sourceCoins.size()); // number of sources
+    for (i in Iter.range(0, sourceCoins.size() - 1)) {
+      writer.writeULEB(1); // Argument::Input variant = 1
+      writer.write16(Nat16.fromNat(i + 1)); // Input index 1, 2, 3, ...
+    };
+
+    // === sender ===
+    let senderBytes = addressToBytes(ownerAddress);
+    writer.writeBytes(senderBytes);
+
+    // === GasData ===
+    // payment: Vec<ObjectRef> - using destination coin
+    writer.writeULEB(1);
+    serializeObjectRefV2(writer, destCoin);
+
+    // owner: SuiAddress
+    writer.writeBytes(senderBytes);
+
+    // price: u64 = 1000
+    writer.write64(1000);
+
+    // budget: u64
+    writer.write64(gasBudget);
+
+    // === expiration: TransactionExpiration::None = 0 ===
+    writer.writeULEB(0);
+
+    writer.toBytes()
   };
 }

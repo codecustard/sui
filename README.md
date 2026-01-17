@@ -103,6 +103,7 @@ Returns:
 | `getSuiCoins(address)` | List all coin objects for an address |
 | `transferSuiSafe(sender, recipient, amount, gasBudget)` | Transfer SUI using BCS serialization (recommended) |
 | `transferSuiSimple(sender, recipient, amount, gasBudget)` | Transfer SUI using RPC method |
+| `splitCoins(owner, amounts, gasBudget)` | Split one coin into multiple coins |
 | `mergeCoins(owner, gasBudget)` | Merge multiple coins into one |
 | `getTransactionStatus(digest)` | Get transaction status, gas used, timestamp |
 | `requestFaucet(address)` | Request testnet SUI tokens |
@@ -113,6 +114,7 @@ Returns:
 Core transfer functionality with BCS serialization:
 - `transferSuiSimple()` - Transfer using `unsafe_transferSui` RPC
 - `transferSuiSafe()` - Transfer with proper BCS transaction building
+- `splitCoins()` - Split one coin into multiple coins
 - `mergeCoins()` - Merge multiple coins into one
 - `getTransactionStatus()` - Query transaction status
 - `getObjectInfo()` - Fetch object data from RPC

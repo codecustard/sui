@@ -187,6 +187,41 @@ public func transferSuiNew(
 
 ---
 
+### splitCoins
+
+Split one coin into multiple coins with specified amounts.
+
+```motoko
+public func splitCoins(
+  ownerAddress : Text,
+  amounts : [Nat64],
+  gasBudget : Nat64
+) : async Result.Result<Text, Text>
+```
+
+**Parameters:**
+- `ownerAddress` - Address that owns the coin to split
+- `amounts` - Array of amounts for each new coin (in MIST)
+- `gasBudget` - Maximum gas budget in MIST
+
+**Returns:** Transaction digest on success
+
+**Notes:**
+- Creates N new coins from the first available coin
+- Original coin retains remainder (minus amounts and gas)
+- More efficient than multiple self-transfers
+
+**Example:**
+```bash
+dfx canister call sui_example_basic splitCoins '(
+  "0x9c219cda...",
+  vec { 100000000 : nat64; 100000000 : nat64; 100000000 : nat64 },
+  10000000 : nat64
+)'
+```
+
+---
+
 ### mergeCoins
 
 Merge multiple coin objects into one.

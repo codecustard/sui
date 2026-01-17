@@ -211,6 +211,35 @@ dfx canister call sui_example_basic transferSuiNew '(
 
 ## Coin Management
 
+### Split Coins
+
+Split one coin into multiple coins with specified amounts:
+
+```bash
+dfx canister call sui_example_basic splitCoins '(
+  "0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02",
+  vec { 100000000 : nat64; 100000000 : nat64; 100000000 : nat64 },
+  10000000 : nat64
+)'
+```
+
+Parameters:
+- Owner address
+- Array of amounts in MIST (each becomes a new coin)
+- Gas budget in MIST
+
+Output:
+```
+(variant { ok = "TRANSACTION_DIGEST" })
+```
+
+**When to use:**
+- Preparing coins for multiple transfers or airdrops
+- Creating specific denominations
+- More efficient than multiple self-transfers
+
+---
+
 ### Merge Coins
 
 Consolidate multiple coin objects into one (reduces fragmentation):

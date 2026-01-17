@@ -1,397 +1,418 @@
 # SUI Library Usage Examples
 
-This document provides practical examples demonstrating the SUI blockchain library's functionality for Internet Computer (ICP) canisters.
+Practical examples for interacting with the SUI blockchain from ICP canisters.
 
 ## Table of Contents
-1. [Address Operations](#address-operations)
-2. [Transaction Building](#transaction-building)
-3. [Wallet Management](#wallet-management)
-4. [BCS Encoding](#bcs-encoding)
-5. [Full Integration Example](#full-integration-example)
+
+1. [Quick Start (CLI)](#quick-start-cli)
+2. [Address Operations](#address-operations)
+3. [Balance Queries](#balance-queries)
+4. [SUI Transfers](#sui-transfers)
+5. [Transaction Status](#transaction-status)
+6. [Testnet Faucet](#testnet-faucet)
+7. [Motoko Integration](#motoko-integration)
+8. [Error Handling](#error-handling)
+
+---
+
+## Quick Start (CLI)
+
+These examples use `dfx canister call` to interact with the deployed canister.
+
+### Generate Address
+
+```bash
+dfx canister call sui_example_basic generateAddress '(null)'
+```
+
+Output:
+```
+(variant {
+  ok = record {
+    created = 1_768_616_660_443_507_000 : int;
+    publicKey = blob "\02\a3\72\da...";
+    scheme = variant { Secp256k1 };
+    address = "0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02";
+  }
+})
+```
+
+### Check Balance (Formatted)
+
+```bash
+dfx canister call sui_example_basic getFormattedBalance '("0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02")'
+```
+
+Output:
+```
+(variant { ok = "0.8190 SUI" })
+```
+
+### Transfer SUI
+
+```bash
+dfx canister call sui_example_basic transferSuiSafe '(
+  "0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02",
+  "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  1000000 : nat64,
+  10000000 : nat64
+)'
+```
+
+Parameters:
+- Sender address
+- Recipient address
+- Amount in MIST (1000000 = 0.001 SUI)
+- Gas budget in MIST (10000000 = 0.01 SUI)
+
+Output:
+```
+(variant { ok = "8vvjczwT2PicnDSuj5sjfJxCehZAR5U9ugZ8rqGfHgEG" })
+```
+
+### Check Transaction Status
+
+```bash
+dfx canister call sui_example_basic getTransactionStatus '("8vvjczwT2PicnDSuj5sjfJxCehZAR5U9ugZ8rqGfHgEG")'
+```
+
+Output:
+```
+(variant {
+  ok = record {
+    status = "success";
+    error = null;
+    timestamp = opt "1768616686913";
+    digest = "8vvjczwT2PicnDSuj5sjfJxCehZAR5U9ugZ8rqGfHgEG";
+    gasUsed = 1_997_880 : nat64;
+  }
+})
+```
 
 ---
 
 ## Address Operations
 
-### Validating a SUI Address
+### Validate Address
 
-```motoko
-import Validation "src/validation";
-import Address "src/address";
-
-// Check if an address is valid
-let address = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
-if (Validation.isValidAddress(address)) {
-  // Address is valid - 32 bytes with 0x prefix
-} else {
-  // Invalid address format
-};
+```bash
+dfx canister call sui_example_basic validateAddress '("0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02")'
 ```
 
-### Normalizing Short Addresses
-
-```motoko
-// Short addresses can be normalized to full 64-char format
-switch (Validation.normalizeAddress("0x1")) {
-  case (#ok(normalized)) {
-    // normalized = "0x0000000000000000000000000000000000000000000000000000000000000001"
-  };
-  case (#err(msg)) {
-    // Handle error
-  };
-};
+Output:
+```
+(true)
 ```
 
-### Converting Public Key to Address
+### Generate with Derivation Path
 
-```motoko
-import Address "src/address";
-import Array "mo:base/Array";
-import Nat8 "mo:base/Nat8";
-
-// Ed25519 public key (32 bytes)
-let ed25519PubKey = Array.tabulate<Nat8>(32, func(i) { Nat8.fromNat(i) });
-
-switch (Address.publicKeyToAddress(ed25519PubKey, #ED25519)) {
-  case (#ok(suiAddress)) {
-    // suiAddress is a valid SUI address derived from the public key
-  };
-  case (#err(msg)) {
-    // Handle error
-  };
-};
-
-// Secp256k1 public key (33 bytes compressed)
-let secp256k1PubKey = Array.tabulate<Nat8>(33, func(i) { Nat8.fromNat(i % 256) });
-
-switch (Address.publicKeyToAddress(secp256k1PubKey, #Secp256k1)) {
-  case (#ok(suiAddress)) {
-    // suiAddress derived from Secp256k1 key
-  };
-  case (#err(msg)) {
-    // Handle error
-  };
-};
+```bash
+# Generate address with custom derivation path
+dfx canister call sui_example_basic generateAddress '(opt "/0/1")'
 ```
 
 ---
 
-## Transaction Building
+## Balance Queries
 
-### Simple Transfer Transaction
+### Raw Balance (MIST)
 
-```motoko
-import Transaction "src/transaction";
-import Types "src/types";
-
-let senderAddress = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
-let recipientAddress = "0x0000000000000000000000000000000000000000000000000000000000000001";
-
-// Configure gas settings
-let gasData : Types.GasData = {
-  payment = [];
-  owner = senderAddress;
-  price = 1000;      // Gas price per unit
-  budget = 10_000_000; // Max gas budget in MIST
-};
-
-// Create transfer transaction
-let transferTx = Transaction.createTransferTransaction(
-  senderAddress,
-  recipientAddress,
-  [],  // objects to transfer (empty for SUI coin transfer)
-  gasData
-);
+```bash
+dfx canister call sui_example_basic checkBalance '("0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02")'
 ```
 
-### SUI Coin Transfer
-
-```motoko
-// Reference to the coin object to transfer from
-let coinObjectRef : Types.ObjectRef = {
-  objectId = "0xabcdef..."; // Your coin object ID
-  version = 1;
-  digest = "base64EncodedDigest==";
-};
-
-// Transfer 1 SUI (1_000_000_000 MIST)
-let suiTransferTx = Transaction.createSuiTransferTransaction(
-  senderAddress,
-  recipientAddress,
-  1_000_000_000,  // 1 SUI in MIST
-  coinObjectRef,
-  gasData
-);
+Output:
+```
+(variant {
+  ok = record {
+    coinCount = 1 : nat;
+    totalBalance = 819_010_600 : nat64
+  }
+})
 ```
 
-### Move Call Transaction
+### Formatted Balance (SUI)
 
-```motoko
-// Call a Move function
-let moveCallTx = Transaction.createMoveCallTransaction(
-  senderAddress,
-  "0x0000000000000000000000000000000000000000000000000000000000000002", // package
-  "coin",      // module
-  "transfer",  // function
-  ["0x2::sui::SUI"],  // type arguments
-  [],  // arguments
-  gasData
-);
+```bash
+dfx canister call sui_example_basic getFormattedBalance '("0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02")'
 ```
 
-### Using TransactionBuilder
-
-```motoko
-// For complex transactions, use the builder API
-let builder = Transaction.TransactionBuilder();
-
-// Add inputs
-let amountIdx = builder.addInput(Transaction.encodeBCSNat64(500_000_000)); // 0.5 SUI
-let coinIdx = builder.addObjectInput(coinObjectRef);
-let recipientIdx = builder.addInput(Transaction.encodeBCSAddress(recipientAddress));
-
-// Add commands
-// 1. Split coins to get exact amount
-ignore builder.splitCoins(#Input(coinIdx), [#Input(amountIdx)]);
-
-// 2. Transfer the split coin to recipient
-ignore builder.transferObjects([#Result(0)], #Input(recipientIdx));
-
-// Build final transaction
-let complexTx = builder.build(senderAddress, gasData);
+Output:
+```
+(variant { ok = "0.8190 SUI" })
 ```
 
-### Coin Split Transaction
+### List Coin Objects
 
-```motoko
-// Split a coin into multiple parts
-let splitTx = Transaction.createCoinSplitTransaction(
-  senderAddress,
-  coinObjectRef,
-  [100_000_000, 200_000_000, 300_000_000], // Split into 0.1, 0.2, 0.3 SUI
-  gasData
-);
+```bash
+dfx canister call sui_example_basic getSuiCoins '("0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02")'
 ```
 
-### Coin Merge Transaction
-
-```motoko
-let sourceCoin : Types.ObjectRef = {
-  objectId = "0x...";
-  version = 1;
-  digest = "...";
-};
-
-// Merge source coins into destination
-let mergeTx = Transaction.createCoinMergeTransaction(
-  senderAddress,
-  coinObjectRef,     // destination
-  [sourceCoin],      // sources to merge
-  gasData
-);
+Output:
+```
+(variant {
+  ok = vec {
+    record {
+      coinObjectId = "0xabc123...";
+      balance = 819_010_600 : nat64;
+      version = 12345 : nat64;
+      digest = "xyz789...";
+    }
+  }
+})
 ```
 
 ---
 
-## Wallet Management
+## SUI Transfers
 
-### Creating Wallet Instances
+### Using transferSuiSafe (Recommended)
 
-```motoko
-import Wallet "src/wallet";
+This method builds the transaction locally with proper BCS serialization:
 
-// Create wallets for different networks
-let devnetWallet = Wallet.createDevnetWallet("my_key_name");
-let testnetWallet = Wallet.createTestnetWallet("my_key_name");
-let mainnetWallet = Wallet.createMainnetWallet("my_key_name");
-
-// Custom RPC endpoint
-let customWallet = Wallet.createCustomWallet(
-  "my_key_name",
-  "custom",
-  "https://my-rpc-endpoint.com"
-);
+```bash
+dfx canister call sui_example_basic transferSuiSafe '(
+  "0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02",
+  "0x0000000000000000000000000000000000000000000000000000000000000001",
+  500000000 : nat64,
+  10000000 : nat64
+)'
 ```
 
-### Generating Addresses (requires ICP environment)
+**Why use transferSuiSafe?**
+- Builds transaction locally (no `unsafe_*` RPC methods)
+- Proper BCS serialization
+- Full control over transaction structure
 
-```motoko
-// In an actor/canister context
-actor {
-  public shared func generateNewAddress() : async Result.Result<Wallet.AddressInfo, Text> {
-    let wallet = Wallet.createDevnetWallet("dfx_test_key");
-    await wallet.generateAddress(?"/0/0")
-  };
-};
+### Using transferSuiNew (Alternative)
+
+This method uses the SUI RPC's `unsafe_transferSui` method:
+
+```bash
+dfx canister call sui_example_basic transferSuiNew '(
+  "0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02",
+  "0x0000000000000000000000000000000000000000000000000000000000000001",
+  500000000 : nat64,
+  10000000 : nat64
+)'
+```
+
+### Amount Reference
+
+| Amount (MIST) | Amount (SUI) |
+|---------------|--------------|
+| 1,000,000 | 0.001 SUI |
+| 10,000,000 | 0.01 SUI |
+| 100,000,000 | 0.1 SUI |
+| 1,000,000,000 | 1 SUI |
+
+---
+
+## Transaction Status
+
+### Get Transaction Details
+
+```bash
+dfx canister call sui_example_basic getTransactionStatus '("YOUR_TRANSACTION_DIGEST")'
+```
+
+### Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `"success"` | Transaction executed successfully |
+| `"failure"` | Transaction failed (check `error` field) |
+
+### View on Explorer
+
+After getting a transaction digest, view it on SUI Explorer:
+```
+https://suiscan.xyz/testnet/tx/<DIGEST>
 ```
 
 ---
 
-## BCS Encoding
+## Testnet Faucet
 
-### Encoding Amounts (Nat64)
+### Request Testnet SUI
 
-```motoko
-// BCS encodes u64 values in little-endian format
-let amount : Nat64 = 1_000_000_000; // 1 SUI
-let encoded = Transaction.encodeBCSNat64(amount);
-// Result: [0x00, 0xCA, 0x9A, 0x3B, 0x00, 0x00, 0x00, 0x00] (8 bytes, little-endian)
+```bash
+dfx canister call sui_example_basic requestFaucet '("0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02")'
 ```
 
-### Encoding Addresses
-
-```motoko
-// Addresses are encoded as 32 raw bytes
-let address = "0x0000000000000000000000000000000000000000000000000000000000000001";
-let encoded = Transaction.encodeBCSAddress(address);
-// Result: 32 bytes, with last byte being 0x01
-```
-
-### Serializing Transactions
-
-```motoko
-// Get BCS-encoded transaction bytes
-let txBytes = Transaction.serializeTransaction(txData);
-
-// For debugging, use the debug function
-let (first20, totalLen, ascii) = Transaction.debugSerializeTransaction(txData);
-```
+**Note:** The faucet has rate limits. If you see "Too Many Requests", wait and try again.
 
 ---
 
-## Full Integration Example
+## Motoko Integration
+
+### Basic Canister Setup
 
 ```motoko
-import Array "mo:base/Array";
-import Nat8 "mo:base/Nat8";
 import Result "mo:base/Result";
-import Types "src/types";
-import Transaction "src/transaction";
-import Validation "src/validation";
+import SuiTransfer "../src/sui_transfer";
+import Wallet "../src/wallet";
+import Types "../src/types";
 
-actor SuiTransferExample {
+actor MyCanister {
 
-  // Prepare and sign a SUI transfer
-  public func prepareSuiTransfer(
-    sender: Text,
-    recipient: Text,
-    amount: Nat64,
-    coinObjectId: Text,
-    coinVersion: Nat64,
-    coinDigest: Text
-  ) : async Result.Result<Text, Text> {
-
-    // Validate addresses
-    if (not Validation.isValidAddress(sender)) {
-      return #err("Invalid sender address");
-    };
-    if (not Validation.isValidAddress(recipient)) {
-      return #err("Invalid recipient address");
-    };
-
-    // Create coin reference
-    let coinRef : Types.ObjectRef = {
-      objectId = coinObjectId;
-      version = coinVersion;
-      digest = coinDigest;
-    };
-
-    // Gas configuration
-    let gasData : Types.GasData = {
-      payment = [];
-      owner = sender;
-      price = 1000;
-      budget = 20_000_000;
-    };
-
-    // Build transaction
-    let txData = Transaction.createSuiTransferTransaction(
-      sender,
-      recipient,
-      amount,
-      coinRef,
-      gasData
-    );
-
-    // Serialize for network
-    let txBytes = Transaction.serializeTransaction(txData);
-
-    // Sign (with proper keys in production)
-    let privateKey = Array.tabulate<Nat8>(32, func(i) { Nat8.fromNat(i) });
-    let publicKey = Array.tabulate<Nat8>(32, func(i) { Nat8.fromNat(i + 32) });
-
-    switch (Transaction.signTransaction(txData, privateKey, publicKey)) {
-      case (#ok(signedTx)) {
-        // Verify signature
-        if (Transaction.verifyTransaction(signedTx)) {
-          #ok("Transaction prepared and signed successfully. " #
-              "Bytes: " # debug_show(txBytes.size()))
-        } else {
-          #err("Signature verification failed")
-        }
-      };
-      case (#err(msg)) {
-        #err("Signing failed: " # msg)
-      };
+  // Generate a new SUI address
+  public func getMyAddress() : async Result.Result<Text, Text> {
+    let wallet = Wallet.createTestnetWallet("dfx_test_key");
+    switch (await wallet.generateAddress(null)) {
+      case (#ok(info)) { #ok(info.address) };
+      case (#err(e)) { #err(e) };
     }
   };
 
-  // Check if address is valid
-  public query func validateAddress(address: Text) : async Bool {
-    Validation.isValidAddress(address)
+  // Check balance
+  public func myBalance(address : Text) : async Result.Result<Text, Text> {
+    let wallet = Wallet.createTestnetWallet("dfx_test_key");
+    switch (await wallet.getBalance(address)) {
+      case (#ok(balance)) {
+        #ok(SuiTransfer.formatBalance(balance.total_balance))
+      };
+      case (#err(e)) { #err(e) };
+    }
   };
 
-  // Normalize a short address
-  public query func normalizeAddress(address: Text) : async Result.Result<Text, Text> {
-    Validation.normalizeAddress(address)
+  // Transfer SUI
+  public func sendSui(
+    sender : Text,
+    recipient : Text,
+    amount : Nat64
+  ) : async Result.Result<Text, Text> {
+    let wallet = Wallet.createTestnetWallet("dfx_test_key");
+
+    // Get coins
+    let coins = switch (await wallet.getBalance(sender)) {
+      case (#ok(b)) { b.objects };
+      case (#err(e)) { return #err(e) };
+    };
+
+    if (coins.size() == 0) {
+      return #err("No coins available");
+    };
+
+    let coin = coins[0];
+    let rpcUrl = "https://fullnode.testnet.sui.io:443";
+
+    // Sign function using ICP threshold ECDSA
+    let signFunc = func(messageHash : Blob) : async Result.Result<Blob, Text> {
+      await wallet.signMessage(messageHash)
+    };
+
+    let getPublicKeyFunc = func() : async Result.Result<Blob, Text> {
+      await wallet.getPublicKey()
+    };
+
+    await SuiTransfer.transferSuiSafe(
+      rpcUrl,
+      sender,
+      coin.coinObjectId,
+      recipient,
+      amount,
+      10_000_000, // gas budget
+      signFunc,
+      getPublicKeyFunc
+    )
   };
-};
+}
+```
+
+### Using the Wallet Module
+
+```motoko
+import Wallet "../src/wallet";
+
+// Create wallet for different networks
+let devnetWallet = Wallet.createDevnetWallet("my_key");
+let testnetWallet = Wallet.createTestnetWallet("my_key");
+let mainnetWallet = Wallet.createMainnetWallet("my_key");
+
+// Custom RPC endpoint
+let customWallet = Wallet.createCustomWallet(
+  "my_key",
+  "custom",
+  "https://my-rpc.example.com"
+);
+```
+
+### Direct SuiTransfer Module Usage
+
+```motoko
+import SuiTransfer "../src/sui_transfer";
+import Result "mo:base/Result";
+
+// Format balance
+let formatted = SuiTransfer.formatBalance(1_500_000_000);
+// Returns: "1.5000 SUI"
+
+// Get transaction status
+let status = await SuiTransfer.getTransactionStatus(
+  "https://fullnode.testnet.sui.io:443",
+  "TRANSACTION_DIGEST"
+);
+
+// Request faucet
+let faucetResult = await SuiTransfer.requestTestnetFaucet(
+  "0x9c219cda..."
+);
 ```
 
 ---
 
-## Running Tests
+## Error Handling
 
-```bash
-# Run all tests
-mops test
+### Common Errors and Solutions
 
-# Build canisters (check only)
-dfx build --check
-
-# Deploy to local dfx
-dfx start --background --clean
-dfx deploy
-```
-
----
-
-## Common Patterns
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `"Insufficient balance"` | Not enough SUI | Check balance, request from faucet |
+| `"Invalid address"` | Malformed address | Ensure 64 hex chars with 0x prefix |
+| `"No coins available"` | Address has no coin objects | Fund the address first |
+| `"Too Many Requests"` | Faucet rate limit | Wait and retry |
+| `"cycles are required"` | Insufficient cycles | Increase cycles in HTTP call |
 
 ### Error Handling Pattern
 
 ```motoko
-// Always handle both success and error cases
-switch (someOperation()) {
+switch (await someOperation()) {
   case (#ok(result)) {
-    // Process successful result
+    // Handle success
+    Debug.print("Success: " # debug_show(result));
   };
   case (#err(errorMessage)) {
-    // Log or propagate error
+    // Handle error
     Debug.print("Error: " # errorMessage);
+    // Optionally return error to caller
+    return #err(errorMessage);
   };
 };
 ```
 
-### Gas Budget Guidelines
+---
 
-| Operation | Recommended Budget |
-|-----------|-------------------|
-| Simple transfer | 10,000,000 MIST |
-| Move call | 20,000,000 MIST |
-| Complex transaction | 50,000,000 MIST |
-| Package publish | 100,000,000 MIST |
+## Gas Budget Guidelines
+
+| Operation | Recommended Budget (MIST) | Typical Usage |
+|-----------|--------------------------|---------------|
+| Simple transfer | 10,000,000 | ~2,000,000 |
+| Move call | 20,000,000 | ~5,000,000 |
+| Complex tx | 50,000,000 | varies |
+
+**Tip:** The gas budget is the maximum you're willing to pay. Unused gas is returned.
 
 ---
 
-*For more examples, see the test files in `/test/` directory.*
+## Network URLs
+
+| Network | RPC URL |
+|---------|---------|
+| Testnet | `https://fullnode.testnet.sui.io:443` |
+| Mainnet | `https://fullnode.mainnet.sui.io:443` |
+| Devnet | `https://fullnode.devnet.sui.io:443` |
+
+---
+
+*Last updated: 2025-01-16*

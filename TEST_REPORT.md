@@ -2,11 +2,40 @@
 
 **Date:** 2025-01-16
 **Library Version:** 0.1.0
-**Status:** ✅ FULLY OPERATIONAL
+**Status:** ✅ FULLY OPERATIONAL - LIVE TRANSFERS WORKING
 
 ## Executive Summary
 
-The SUI blockchain library for Internet Computer (ICP) has been thoroughly tested and validated. All core functionality tests pass, the library integrates cleanly with the existing codebase, and the implementation meets POC requirements.
+The SUI blockchain library for Internet Computer (ICP) has been thoroughly tested and validated with **live transfers on SUI testnet**. BCS serialization has been fixed and verified to produce byte-identical output to the SUI RPC. All core functionality works correctly.
+
+---
+
+## Live Testnet Verification
+
+### Successful Transfers
+
+| Transaction | Method | Amount | Status |
+|-------------|--------|--------|--------|
+| `8vvjczwT2PicnDSuj5sjfJxCehZAR5U9ugZ8rqGfHgEG` | transferSuiSafe | 0.001 SUI | ✅ Success |
+| `2LNXKPrJUoYVe94qBN9gpfSEkJEeSQWzzVTQPoqLZM5L` | transferSuiSafe | 0.001 SUI | ✅ Success |
+
+### Test Address
+- **Address:** `0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02`
+- **Network:** SUI Testnet
+- **Balance:** ~0.82 SUI (after transfers)
+
+### Verified Functions
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `generateAddress` | ✅ Working | ICP threshold ECDSA (Secp256k1) |
+| `checkBalance` | ✅ Working | Returns MIST + coin count |
+| `getFormattedBalance` | ✅ Working | Returns "X.XXXX SUI" |
+| `getSuiCoins` | ✅ Working | Lists coin objects |
+| `transferSuiSafe` | ✅ Working | BCS serialization verified |
+| `transferSuiNew` | ✅ Working | Uses unsafe_transferSui RPC |
+| `getTransactionStatus` | ✅ Working | Returns status, gas, timestamp |
+| `requestFaucet` | ✅ Working | Rate-limited by faucet |
 
 ---
 
@@ -138,7 +167,7 @@ The following warnings were observed during `dfx build --check`:
 | base-x-encoder | 2.1.0 | ✅ Installed |
 | sha3 | 0.1.1 | ✅ Installed |
 | sha2 | 0.1.9 | ✅ Installed |
-| bcs | 0.1.2 | ✅ Installed |
+| bcs | 0.1.3 | ✅ Installed |
 | test | 2.1.1 | ✅ Installed (dev) |
 
 ### Build Status
@@ -220,7 +249,7 @@ json = "1.4.0"
 base-x-encoder = "2.1.0"
 sha3 = "0.1.1"
 sha2 = "0.1.9"
-bcs = "0.1.2"
+bcs = "0.1.3"
 ```
 
 ### dfx.json
@@ -258,9 +287,11 @@ bcs = "0.1.2"
 - For production: integrate proper Ed25519 cryptographic library
 - ICP threshold ECDSA is available for Secp256k1 signing
 
-### 3. BCS Serialization
-- Some complex types may need additional testing
-- Digest handling requires proper base64 decoding (may produce 33 bytes)
+### 3. BCS Serialization (FIXED)
+- ✅ BCS serialization now produces byte-identical output to SUI RPC
+- ✅ Digest handling fixed: uses base58 decoding (not base64)
+- ✅ Length prefix added for digest bytes (ULEB128)
+- ✅ Correct Argument variants: Result(0) for SplitCoins output
 
 ### 4. Gas Budget
 - Ensure sufficient gas budget for complex transactions

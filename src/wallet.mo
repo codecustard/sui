@@ -18,17 +18,13 @@ import Nat8 "mo:base/Nat8";
 import Nat64 "mo:base/Nat64";
 import Error "mo:base/Error";
 import Debug "mo:base/Debug";
-import Iter "mo:base/Iter";
-import Cycles "mo:base/ExperimentalCycles";
 import IC "mo:ic";
 import Json "mo:json";
 import BaseX "mo:base-x-encoder";
-import SHA3 "mo:sha3";
 
 import Types "types";
 import Address "address";
 import Transaction "transaction";
-import Validation "validation";
 import Blake2b "mo:blake2b";
 import Sha256 "mo:sha2/Sha256";
 
@@ -71,17 +67,6 @@ module {
 
   // SUI wallet implementation
   public class Wallet(config: WalletConfig) {
-
-    // Validate configuration
-    private func validateConfig() : Result<()> {
-      if (Text.size(config.key_name) == 0) {
-        return #err("Key name cannot be empty");
-      };
-      if (config.network != "mainnet" and config.network != "testnet" and config.network != "devnet") {
-        return #err("Network must be 'mainnet', 'testnet', or 'devnet'");
-      };
-      #ok(())
-    };
 
     // Generate SUI address with derivation path
     public func generateAddress(derivation_path: ?Text) : async Result<AddressInfo> {
@@ -296,7 +281,7 @@ module {
       to_address: SuiAddress,
       amount: Nat64,
       gas_budget: ?Nat64,
-      derivation_path: ?Text
+      _derivation_path: ?Text
     ) : async Result<TransactionResult> {
       let budget = switch (gas_budget) {
         case (null) { 20000000 : Nat64 }; // 20M MIST default
@@ -611,7 +596,7 @@ module {
     };
 
     // Serialize transaction to bytes using proper BCS-style encoding for SUI
-    private func serializeTransaction(tx_data: TransactionData) : [Nat8] {
+    private func _serializeTransaction(tx_data: TransactionData) : [Nat8] {
       let buffer = Buffer.Buffer<Nat8>(512);
 
       // SUI TransactionData BCS serialization
@@ -845,7 +830,7 @@ module {
     };
 
     // Submit transaction to SUI network via RPC using proper transaction building
-    private func submitTransaction(tx_data: TransactionData, signature: Text) : async Result<Text> {
+    private func submitTransaction(_tx_data: TransactionData, _signature: Text) : async Result<Text> {
       #err("submitTransaction deprecated - use sendTransactionDirect instead")
     };
 
@@ -854,7 +839,7 @@ module {
       from_address: SuiAddress,
       to_address: SuiAddress,
       amount: Nat64,
-      gas_budget: Nat64,
+      _gas_budget: Nat64,
       rpc_url: Text
     ) : async Result<Text> {
       // Get coins for the transfer
@@ -991,7 +976,7 @@ module {
                   // Parse response to extract transaction digest
                   switch (parseTransactionResponse(response_text)) {
                     case (#ok(digest)) { #ok(digest) };
-                    case (#err(error)) { #err("Transaction failed: " # response_text) };
+                    case (#err(_error)) { #err("Transaction failed: " # response_text) };
                   }
                 };
                 case (_) {
@@ -1009,9 +994,9 @@ module {
     };
 
     // Sign transaction bytes and submit to network
-    private func signAndSubmitTransactionBytes(
+    private func _signAndSubmitTransactionBytes(
       tx_bytes_b64: Text,
-      sender_address: SuiAddress,
+      _sender_address: SuiAddress,
       rpc_url: Text
     ) : async Result<Text> {
       // Decode the transaction bytes
@@ -1100,7 +1085,7 @@ module {
     };
 
     // Sign transaction data using ICP threshold ECDSA
-    private func signTransactionData(tx_data: TransactionData, derivation_path: Text) : async Result<Text> {
+    private func _signTransactionData(tx_data: TransactionData, derivation_path: Text) : async Result<Text> {
       // Use transaction.mo IntentMessage serialization (required by SUI)
       let intent = Transaction.createTransactionIntent();
       let intent_msg : Types.IntentMessage = {
@@ -1146,7 +1131,7 @@ module {
     };
 
     // Submit signed transaction to SUI network
-    private func submitSignedTransaction(tx_data: TransactionData, signature: Text, rpc_url: Text) : async Result<Text> {
+    private func _submitSignedTransaction(tx_data: TransactionData, signature: Text, rpc_url: Text) : async Result<Text> {
       // Submit raw TransactionData (signing used IntentMessage, submission uses TransactionData)
       let tx_bytes = Transaction.serializeTransaction(tx_data);
       let tx_bytes_b64 = bytesToBase64(tx_bytes);
@@ -1322,7 +1307,7 @@ module {
     };
 
     // Convert DER encoded signature to raw r,s format for SUI
-    private func derToRawSignature(der_sig: [Nat8]) : [Nat8] {
+    private func _derToRawSignature(der_sig: [Nat8]) : [Nat8] {
       if (der_sig.size() < 6) {
         return der_sig; // Invalid DER, return as is
       };
@@ -1429,7 +1414,7 @@ module {
     };
 
     // Extract first coin object ID from transaction data
-    private func getFirstCoinObjectId(tx_data: TransactionData) : Text {
+    private func _getFirstCoinObjectId(tx_data: TransactionData) : Text {
       switch (tx_data.kind) {
         case (#ProgrammableTransaction(pt)) {
           if (pt.inputs.size() > 0) {
@@ -1446,7 +1431,7 @@ module {
     };
 
     // Extract recipient address from transaction data
-    private func getRecipientAddress(tx_data: TransactionData) : Text {
+    private func _getRecipientAddress(tx_data: TransactionData) : Text {
       switch (tx_data.kind) {
         case (#ProgrammableTransaction(pt)) {
           if (pt.commands.size() > 0) {
@@ -1471,14 +1456,14 @@ module {
     };
 
     // Extract transfer amount from stored transaction metadata (placeholder)
-    private func getTransferAmount(tx_data: TransactionData) : Nat64 {
+    private func _getTransferAmount(_tx_data: TransactionData) : Nat64 {
       // For now, return a default amount - we would need to store this
       // during transaction creation or parse it from the transaction structure
       1000000 // 1 SUI in MIST
     };
 
     // Parse transaction bytes from build response
-    private func parseTransactionBytesFromResponse(json_text: Text) : Result<Text> {
+    private func _parseTransactionBytesFromResponse(json_text: Text) : Result<Text> {
       switch (Json.parse(json_text)) {
         case (#err(e)) {
           #err("Failed to parse build response JSON: " # debug_show(e))
@@ -1742,7 +1727,7 @@ module {
   };
 
   // Helper function to serialize CallArg
-  private func serializeCallArg(buffer: Buffer.Buffer<Nat8>, arg: Types.CallArg) {
+  private func _serializeCallArg(buffer: Buffer.Buffer<Nat8>, arg: Types.CallArg) {
     switch (arg) {
       case (#Pure(data)) {
         buffer.add(0); // Tag for Pure

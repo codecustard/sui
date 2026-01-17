@@ -2,7 +2,6 @@ import Array "mo:base/Array";
 import Blob "mo:base/Blob";
 import Debug "mo:base/Debug";
 import Error "mo:base/Error";
-import Iter "mo:base/Iter";
 import Nat "mo:base/Nat";
 import Nat64 "mo:base/Nat64";
 import Result "mo:base/Result";
@@ -613,7 +612,6 @@ module {
             if (i < bytes.size()) bytes[i] else 0
           })
         } else {
-          let padded = Array.tabulate<Nat8>(32, func(i) { 0 });
           let offset = 32 - bytes.size();
           Array.tabulate<Nat8>(32, func(i) {
             if (i >= offset) bytes[i - offset] else 0
@@ -624,49 +622,6 @@ module {
         Array.tabulate<Nat8>(32, func(i) { 0 }) // Fallback to zero address
       };
     }
-  };
-
-  /// Parse coin object reference (simplified)
-  private func parseCoinObjectRef(coinObjectId : Text) : ObjectRef {
-    {
-      objectId = coinObjectId;
-      version = 1; // Simplified - should fetch from RPC
-      digest = "placeholder"; // Simplified - should fetch from RPC
-    }
-  };
-
-  /// Serialize object reference using BCS
-  private func serializeObjectRef(writer : {writeBytes : ([Nat8]) -> (); write64 : (Nat64) -> ()}, objRef : ObjectRef) {
-    let objectIdBytes = addressToBytes(objRef.objectId);
-    writer.writeBytes(objectIdBytes);
-    writer.write64(Nat64.fromNat(objRef.version));
-
-    // Proper digest serialization - decode from base64
-    let digest_bytes_raw = switch (BaseX.fromBase64(objRef.digest)) {
-      case (#ok(bytes)) { bytes };
-      case (#err(_)) { Array.tabulate<Nat8>(32, func(_) { 0 }) };
-    };
-
-    // Ensure exactly 32 bytes for digest (handle SUI's 33-byte digests)
-    let digestBytes = if (digest_bytes_raw.size() == 33) {
-      // Remove first byte if 33 bytes (common in SUI)
-      Array.tabulate<Nat8>(32, func(i) { digest_bytes_raw[i + 1] })
-    } else if (digest_bytes_raw.size() == 32) {
-      digest_bytes_raw
-    } else if (digest_bytes_raw.size() > 32) {
-      Array.tabulate<Nat8>(32, func(i) { digest_bytes_raw[i] })
-    } else {
-      // Pad to 32 bytes
-      Array.tabulate<Nat8>(32, func(i) {
-        if (i < digest_bytes_raw.size()) {
-          digest_bytes_raw[i]
-        } else {
-          0
-        }
-      })
-    };
-
-    writer.writeBytes(digestBytes);
   };
 
   /// Object reference type

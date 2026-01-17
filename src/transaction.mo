@@ -4,14 +4,11 @@ import Buffer "mo:base/Buffer";
 import Nat8 "mo:base/Nat8";
 import Nat32 "mo:base/Nat32";
 import Nat64 "mo:base/Nat64";
-import Int "mo:base/Int";
 import Text "mo:base/Text";
 import Char "mo:base/Char";
 import Iter "mo:base/Iter";
-import Debug "mo:base/Debug";
 import BaseX "mo:base-x-encoder";
 import Types "types";
-import Validation "validation";
 
 module {
   public type TransactionData = Types.TransactionData;
@@ -361,7 +358,7 @@ module {
 
     // Create the message to sign (with SUI's intent prefix)
     let intent : [Nat8] = [0, 0, 0]; // TransactionData intent
-    let messageToSign = Array.append(intent, txBytes);
+    let _messageToSign = Array.append(intent, txBytes);
 
     // TODO: Replace with actual Ed25519 signature
     // For now, create a placeholder signature with proper format

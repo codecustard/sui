@@ -7,7 +7,6 @@
 
 import Result "mo:base/Result";
 import Array "mo:base/Array";
-import Principal "mo:base/Principal";
 import Time "mo:base/Time";
 import HashMap "mo:base/HashMap";
 import Iter "mo:base/Iter";
@@ -18,7 +17,6 @@ import Nat "mo:base/Nat";
 import Nat8 "mo:base/Nat8";
 import Nat64 "mo:base/Nat64";
 import BaseX "mo:base-x-encoder";
-import Buffer "mo:base/Buffer";
 import Json "mo:json";
 import IC "mo:ic";
 
@@ -27,7 +25,6 @@ import Types "../src/types";
 import Address "../src/address";
 import Transaction "../src/transaction";
 import Wallet "../src/wallet";
-import Validation "../src/validation";
 import SuiTransfer "../src/sui_transfer";
 import Error "mo:base/Error";
 
@@ -49,7 +46,7 @@ persistent actor SuiPOC {
   };
 
   // State variables
-  private stable var walletEntries : [(Text, Wallet)] = [];
+  private var walletEntries : [(Text, Wallet)] = [];
   private transient var wallets = HashMap.fromIter<Text, Wallet>(walletEntries.vals(), walletEntries.size(), Text.equal, Text.hash);
 
   // System upgrade functions
@@ -128,7 +125,7 @@ persistent actor SuiPOC {
   public func createTransferTransaction(
     sender: SuiAddress,
     recipient: SuiAddress,
-    amount: Nat64
+    _amount: Nat64
   ) : async Result.Result<TransactionData, Text> {
     // Validate addresses first
     if (not Address.isValidAddress(sender)) {
@@ -401,7 +398,7 @@ persistent actor SuiPOC {
           budget = 10000000;
         };
 
-        let simpleTxData: Types.TransactionData = {
+        let _simpleTxData: Types.TransactionData = {
           version = 1;
           sender = from_address;
           gasData = gasData;
@@ -413,7 +410,7 @@ persistent actor SuiPOC {
         };
 
         // Create placeholder signature for testing BCS format
-        let placeholderSig = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QAFCAw==";
+        let _placeholderSig = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QAFCAw==";
 
         // Submit to see what SUI says about the BCS format
         switch (await sui_wallet.sendTransactionDirect(from_address, from_address, 0, ?10000000, ?"0")) {
@@ -475,7 +472,7 @@ persistent actor SuiPOC {
       case (#ok(addr_info)) {
         let from_address = addr_info.address;
 
-        let gasData: Types.GasData = {
+        let _gasData: Types.GasData = {
           payment = [];
           owner = from_address;
           price = 1000;
@@ -483,8 +480,8 @@ persistent actor SuiPOC {
         };
 
         // Create a transaction with only Pure inputs (no Objects)
-        let recipientBytes = Transaction.encodeBCSAddress("0x0000000000000000000000000000000000000000000000000000000000000001");
-        let amountBytes = Transaction.encodeBCSNat64(1000000);
+        let _recipientBytes = Transaction.encodeBCSAddress("0x0000000000000000000000000000000000000000000000000000000000000001");
+        let _amountBytes = Transaction.encodeBCSNat64(1000000);
 
         // Test completely minimal transaction with no objects
         let minimalGasData: Types.GasData = {
@@ -973,7 +970,7 @@ persistent actor SuiPOC {
 
             // Try submitting this modified transaction
             switch (await sui_wallet.signTransaction(tx_modified, ?"0")) {
-              case (#ok(signature)) {
+              case (#ok(_signature)) {
                 // This will fail because object doesn't exist, but should NOT fail with byte 126 error
                 let debug_info = "Modified ObjectID test: has 126=" # (if (found_126) "YES" else "NO") #
                   " | Original ID: " # originalId #
@@ -1187,7 +1184,7 @@ persistent actor SuiPOC {
           expiration = #None;
         };
 
-        let tx_bytes = Transaction.serializeTransaction(simpleTxData);
+        let _tx_bytes = Transaction.serializeTransaction(simpleTxData);
         let (first_bytes, total_length, ascii_interpretation) = Transaction.debugSerializeTransaction(simpleTxData);
 
         #ok("Simple transaction: " # Nat.toText(total_length) # " bytes, first bytes: " # debug_show(first_bytes) # ", ascii: " # ascii_interpretation)
@@ -1490,7 +1487,7 @@ persistent actor SuiPOC {
           budget = 50000000; // 0.05 SUI budget
         };
 
-        let minimalTx: Types.TransactionData = {
+        let _minimalTx: Types.TransactionData = {
           version = 1;
           sender = sender;
           gasData = gasData;
@@ -1720,7 +1717,7 @@ persistent actor SuiPOC {
   };
 
   /// Extract txBytes from unsafe_paySui response
-  private func extractTxBytesFromResponse(response: Text) : Result.Result<Text, Text> {
+  private func _extractTxBytesFromResponse(response: Text) : Result.Result<Text, Text> {
     // Simple JSON parsing to extract txBytes
     let parts = Text.split(response, #text("\"txBytes\":\""));
     let parts_array = Iter.toArray(parts);
@@ -1738,7 +1735,7 @@ persistent actor SuiPOC {
   };
 
   /// Submit signed transaction via sui_executeTransactionBlock
-  private func submitSignedTransaction(tx_bytes_b64: Text, signature: Text) : async Result.Result<Text, Text> {
+  private func _submitSignedTransaction(tx_bytes_b64: Text, signature: Text) : async Result.Result<Text, Text> {
     let payload = Json.obj([
       ("jsonrpc", Json.str("2.0")),
       ("id", Json.str("1")),
@@ -1872,7 +1869,7 @@ persistent actor SuiPOC {
     let rpcUrl = "https://fullnode.testnet.sui.io:443";
 
     // Create the EXACT same wallet as used for generateAddress
-    let sui_wallet = Wallet.createDevnetWallet("dfx_test_key");
+    let _sui_wallet = Wallet.createDevnetWallet("dfx_test_key");
 
     // First get available coins for the sender
     switch (await SuiTransfer.getSuiCoins(rpcUrl, senderAddress)) {

@@ -10,10 +10,8 @@ import Nat8 "mo:base/Nat8";
 import Nat32 "mo:base/Nat32";
 import Nat64 "mo:base/Nat64";
 import Char "mo:base/Char";
-import Iter "mo:base/Iter";
 import Blob "mo:base/Blob";
 import Result "mo:base/Result";
-import Debug "mo:base/Debug";
 import Error "mo:base/Error";
 import IC "mo:ic";
 

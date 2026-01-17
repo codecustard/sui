@@ -1988,4 +1988,25 @@ persistent actor SuiPOC {
     }
   };
 
+  /// Get transaction status by digest (TESTNET)
+  public func getTransactionStatus(digest : Text) : async Result.Result<SuiTransfer.TransactionStatus, Text> {
+    let rpcUrl = "https://fullnode.testnet.sui.io:443";
+    await SuiTransfer.getTransactionStatus(rpcUrl, digest)
+  };
+
+  /// Get formatted balance (returns "X.XXXX SUI" format)
+  public func getFormattedBalance(address : Text) : async Result.Result<Text, Text> {
+    switch (await checkBalance(address)) {
+      case (#err(e)) { #err(e) };
+      case (#ok(balance)) {
+        #ok(SuiTransfer.formatBalance(balance.totalBalance))
+      };
+    }
+  };
+
+  /// Request testnet faucet tokens
+  public func requestFaucet(address : Text) : async Result.Result<Text, Text> {
+    await SuiTransfer.requestTestnetFaucet(address)
+  };
+
 }

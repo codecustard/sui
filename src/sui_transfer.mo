@@ -630,4 +630,194 @@ module {
     version : Nat;
     digest : Text;
   };
+
+  /// Transaction status result
+  public type TransactionStatus = {
+    digest : Text;
+    status : Text;  // "success" or "failure"
+    error : ?Text;
+    gasUsed : Nat64;
+    timestamp : ?Text;
+  };
+
+  /// Get transaction status by digest
+  public func getTransactionStatus(
+    rpcUrl : Text,
+    digest : Text
+  ) : async Result.Result<TransactionStatus, Text> {
+    try {
+      let request_body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"sui_getTransactionBlock\"," #
+        "\"params\":[\"" # digest # "\",{\"showEffects\":true}]}";
+
+      let response = await (with cycles = 600_000_000) IC.ic.http_request({
+        url = rpcUrl;
+        max_response_bytes = ?50000;
+        headers = [{ name = "Content-Type"; value = "application/json" }];
+        body = ?Text.encodeUtf8(request_body);
+        method = #post;
+        is_replicated = ?false;
+        transform = null;
+      });
+
+      let body_text = switch (Text.decodeUtf8(response.body)) {
+        case (?text) text;
+        case null { return #err("Failed to decode response") };
+      };
+
+      switch (Json.parse(body_text)) {
+        case (#err(_)) { #err("Failed to parse JSON response") };
+        case (#ok(json)) {
+          // Check for error
+          switch (Json.get(json, "error")) {
+            case (?_) { return #err("RPC error: " # body_text) };
+            case (null) {};
+          };
+
+          // Parse result using Json helper functions
+          switch (Json.get(json, "result")) {
+            case (?result) {
+              // Get status from effects.status.status
+              let status = switch (Json.get(result, "effects")) {
+                case (?effects) {
+                  switch (Json.get(effects, "status")) {
+                    case (?statusObj) {
+                      switch (Json.getAsText(statusObj, "status")) {
+                        case (#ok(s)) { s };
+                        case (#err(_)) { "unknown" };
+                      };
+                    };
+                    case (null) { "unknown" };
+                  };
+                };
+                case (null) { "unknown" };
+              };
+
+              // Get error if present
+              let error : ?Text = switch (Json.get(result, "effects")) {
+                case (?effects) {
+                  switch (Json.get(effects, "status")) {
+                    case (?statusObj) {
+                      switch (Json.getAsText(statusObj, "error")) {
+                        case (#ok(e)) { ?e };
+                        case (#err(_)) { null };
+                      };
+                    };
+                    case (null) { null };
+                  };
+                };
+                case (null) { null };
+              };
+
+              // Get gas used (sum of all gas fields)
+              let gasUsed : Nat64 = switch (Json.get(result, "effects")) {
+                case (?effects) {
+                  switch (Json.get(effects, "gasUsed")) {
+                    case (?gasObj) {
+                      var total : Nat64 = 0;
+                      switch (Json.getAsText(gasObj, "computationCost")) {
+                        case (#ok(v)) { total += textToNat64(v) };
+                        case (#err(_)) {};
+                      };
+                      switch (Json.getAsText(gasObj, "storageCost")) {
+                        case (#ok(v)) { total += textToNat64(v) };
+                        case (#err(_)) {};
+                      };
+                      switch (Json.getAsText(gasObj, "storageRebate")) {
+                        case (#ok(v)) {
+                          let rebate = textToNat64(v);
+                          if (total > rebate) { total -= rebate } else { total := 0 };
+                        };
+                        case (#err(_)) {};
+                      };
+                      total
+                    };
+                    case (null) { 0 };
+                  };
+                };
+                case (null) { 0 };
+              };
+
+              // Get timestamp
+              let timestamp : ?Text = switch (Json.getAsText(result, "timestampMs")) {
+                case (#ok(t)) { ?t };
+                case (#err(_)) { null };
+              };
+
+              #ok({
+                digest = digest;
+                status = status;
+                error = error;
+                gasUsed = gasUsed;
+                timestamp = timestamp;
+              })
+            };
+            case (null) { #err("No result in response") };
+          };
+        };
+      };
+    } catch (e) {
+      #err("Request failed: " # Error.message(e))
+    };
+  };
+
+  /// Format balance from MIST to SUI
+  public func formatBalance(mistAmount : Nat64) : Text {
+    let sui = mistAmount / 1_000_000_000;
+    let remainder = mistAmount % 1_000_000_000;
+
+    // Format with up to 4 decimal places
+    let decimals = remainder / 100_000;
+
+    if (decimals == 0) {
+      Nat64.toText(sui) # " SUI"
+    } else {
+      Nat64.toText(sui) # "." # padLeft(Nat64.toText(decimals), 4, '0') # " SUI"
+    };
+  };
+
+  /// Helper to pad string with leading characters
+  private func padLeft(text : Text, len : Nat, char : Char) : Text {
+    var result = text;
+    while (result.size() < len) {
+      result := Text.fromChar(char) # result;
+    };
+    result
+  };
+
+  /// Request testnet faucet
+  public func requestTestnetFaucet(
+    address : Text
+  ) : async Result.Result<Text, Text> {
+    try {
+      let request_body = "{\"FixedAmountRequest\":{\"recipient\":\"" # address # "\"}}";
+
+      let response = await (with cycles = 600_000_000) IC.ic.http_request({
+        url = "https://faucet.testnet.sui.io/v2/gas";
+        max_response_bytes = ?10000;
+        headers = [
+          { name = "Content-Type"; value = "application/json" }
+        ];
+        body = ?Text.encodeUtf8(request_body);
+        method = #post;
+        is_replicated = ?false;
+        transform = null;
+      });
+
+      if (response.status == 200 or response.status == 201 or response.status == 202) {
+        let body_text = switch (Text.decodeUtf8(response.body)) {
+          case (?text) text;
+          case null { "Success (no body)" };
+        };
+        #ok("Faucet request successful: " # body_text)
+      } else {
+        let error_text = switch (Text.decodeUtf8(response.body)) {
+          case (?text) text;
+          case null { "Unknown error" };
+        };
+        #err("Faucet request failed (" # debug_show(response.status) # "): " # error_text)
+      };
+    } catch (e) {
+      #err("Faucet request error: " # Error.message(e))
+    };
+  };
 }

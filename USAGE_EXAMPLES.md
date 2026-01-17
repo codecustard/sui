@@ -8,10 +8,11 @@ Practical examples for interacting with the SUI blockchain from ICP canisters.
 2. [Address Operations](#address-operations)
 3. [Balance Queries](#balance-queries)
 4. [SUI Transfers](#sui-transfers)
-5. [Transaction Status](#transaction-status)
-6. [Testnet Faucet](#testnet-faucet)
-7. [Motoko Integration](#motoko-integration)
-8. [Error Handling](#error-handling)
+5. [Coin Management](#coin-management)
+6. [Transaction Status](#transaction-status)
+7. [Testnet Faucet](#testnet-faucet)
+8. [Motoko Integration](#motoko-integration)
+9. [Error Handling](#error-handling)
 
 ---
 
@@ -205,6 +206,40 @@ dfx canister call sui_example_basic transferSuiNew '(
 | 10,000,000 | 0.01 SUI |
 | 100,000,000 | 0.1 SUI |
 | 1,000,000,000 | 1 SUI |
+
+---
+
+## Coin Management
+
+### Merge Coins
+
+Consolidate multiple coin objects into one (reduces fragmentation):
+
+```bash
+dfx canister call sui_example_basic mergeCoins '(
+  "0x9c219cda57d9f8cac8bbcd5356f7d416d5286a91605ea6c1465c645e7b054c02",
+  10000000 : nat64
+)'
+```
+
+Parameters:
+- Owner address (must have 2+ coins)
+- Gas budget in MIST
+
+Output (success):
+```
+(variant { ok = "TRANSACTION_DIGEST" })
+```
+
+Output (not enough coins):
+```
+(variant { err = "Need at least 2 coins to merge. Found: 1" })
+```
+
+**When to use:**
+- After receiving many small payments
+- Before a large transfer (avoids multi-coin complexity)
+- To simplify coin management
 
 ---
 

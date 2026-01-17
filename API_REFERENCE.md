@@ -187,6 +187,38 @@ public func transferSuiNew(
 
 ---
 
+### mergeCoins
+
+Merge multiple coin objects into one.
+
+```motoko
+public func mergeCoins(
+  ownerAddress : Text,
+  gasBudget : Nat64
+) : async Result.Result<Text, Text>
+```
+
+**Parameters:**
+- `ownerAddress` - Address that owns the coins
+- `gasBudget` - Maximum gas budget in MIST
+
+**Returns:** Transaction digest on success
+
+**Notes:**
+- Requires at least 2 coins
+- First coin becomes the destination (and pays gas)
+- All other coins are merged into the first
+
+**Example:**
+```bash
+dfx canister call sui_example_basic mergeCoins '(
+  "0x9c219cda...",
+  10000000 : nat64
+)'
+```
+
+---
+
 ### getTransactionStatus
 
 Get transaction status by digest.

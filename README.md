@@ -102,7 +102,8 @@ Returns:
 | `getFormattedBalance(address)` | Get human-readable balance ("X.XXXX SUI") |
 | `getSuiCoins(address)` | List all coin objects for an address |
 | `transferSuiSafe(sender, recipient, amount, gasBudget)` | Transfer SUI using BCS serialization (recommended) |
-| `transferSuiNew(sender, recipient, amount, gasBudget)` | Transfer SUI using RPC method |
+| `transferSuiSimple(sender, recipient, amount, gasBudget)` | Transfer SUI using RPC method |
+| `mergeCoins(owner, gasBudget)` | Merge multiple coins into one |
 | `getTransactionStatus(digest)` | Get transaction status, gas used, timestamp |
 | `requestFaucet(address)` | Request testnet SUI tokens |
 
@@ -112,6 +113,7 @@ Returns:
 Core transfer functionality with BCS serialization:
 - `transferSuiSimple()` - Transfer using `unsafe_transferSui` RPC
 - `transferSuiSafe()` - Transfer with proper BCS transaction building
+- `mergeCoins()` - Merge multiple coins into one
 - `getTransactionStatus()` - Query transaction status
 - `getObjectInfo()` - Fetch object data from RPC
 - `formatBalance()` - Format MIST to SUI string

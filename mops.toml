@@ -2,7 +2,7 @@ dev-dependencies = { }
 
 [package]
 name = "sui"
-version = "0.1.0"
+version = "0.2.0"
 description = "SUI blockchain library for Internet Computer"
 repository = "https://github.com/codecustard/sui"
 keywords = [ "sui", "blockchain", "chain-fusion", "crypto" ]

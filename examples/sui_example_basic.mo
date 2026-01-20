@@ -122,6 +122,23 @@ persistent actor SuiExample {
     };
   };
 
+  /// Get balances for multiple addresses in a single batch request
+  ///
+  /// Uses JSON-RPC batch requests for efficiency - one HTTP call for all addresses.
+  /// @param addresses - Array of SUI addresses to query (max 50)
+  /// @return Batch result with individual balance results and success/failure counts
+  public func getBalances(addresses : [Text]) : async Result.Result<Wallet.BatchBalanceResult, Text> {
+    let suiWallet = Wallet.createTestnetWallet("dfx_test_key");
+    await suiWallet.getBalances(addresses, null)
+  };
+
+  /// Get balances with custom max address limit
+  public func getBalancesWithLimit(addresses : [Text], maxAddresses : Nat) : async Result.Result<Wallet.BatchBalanceResult, Text> {
+    let suiWallet = Wallet.createTestnetWallet("dfx_test_key");
+    let config : Wallet.BatchConfig = { maxAddresses = ?maxAddresses };
+    await suiWallet.getBalances(addresses, ?config)
+  };
+
   // ============================================
   // TRANSFER OPERATIONS
   // ============================================

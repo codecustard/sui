@@ -176,6 +176,104 @@ do {
   Debug.print("✅ Error patterns validated");
 };
 
+// Test 9: Batch balance types
+Debug.print("Test 9: Batch balance types...");
+do {
+  // Test BatchConfig structure
+  let defaultConfig: Wallet.BatchConfig = {
+    maxAddresses = null;
+  };
+  assert defaultConfig.maxAddresses == null;
+
+  let customConfig: Wallet.BatchConfig = {
+    maxAddresses = ?25;
+  };
+  switch (customConfig.maxAddresses) {
+    case (?max) { assert max == 25 };
+    case (null) { assert false };
+  };
+
+  // Test BalanceResult structure
+  let successBalance: Wallet.Balance = {
+    total_balance = 1_000_000_000;
+    objects = [];
+    object_count = 0;
+  };
+
+  let successResult: Wallet.BalanceResult = {
+    address = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+    result = #ok(successBalance);
+  };
+  assert Address.isValidAddress(successResult.address);
+  switch (successResult.result) {
+    case (#ok(bal)) { assert bal.total_balance == 1_000_000_000 };
+    case (#err(_)) { assert false };
+  };
+
+  let errorResult: Wallet.BalanceResult = {
+    address = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    result = #err("Test error");
+  };
+  switch (errorResult.result) {
+    case (#ok(_)) { assert false };
+    case (#err(e)) { assert e == "Test error" };
+  };
+
+  // Test BatchBalanceResult structure
+  let batchResult: Wallet.BatchBalanceResult = {
+    results = [successResult, errorResult];
+    successCount = 1;
+    failureCount = 1;
+  };
+  assert batchResult.results.size() == 2;
+  assert batchResult.successCount == 1;
+  assert batchResult.failureCount == 1;
+
+  Debug.print("✅ Batch balance types work");
+};
+
+// Test 10: Batch validation logic patterns
+Debug.print("Test 10: Batch validation patterns...");
+do {
+  // Test empty array detection
+  let emptyArray: [Text] = [];
+  assert emptyArray.size() == 0;
+
+  // Test max addresses validation
+  let maxDefault = 50;
+  let addresses5 = Array.tabulate<Text>(5, func(_) { "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" });
+  assert addresses5.size() <= maxDefault;
+
+  let addresses100 = Array.tabulate<Text>(100, func(_) { "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" });
+  assert addresses100.size() > maxDefault;
+
+  // Test that all addresses in an array can be validated
+  let validAddresses = [
+    "0x0000000000000000000000000000000000000000000000000000000000000001",
+    "0x0000000000000000000000000000000000000000000000000000000000000002",
+    "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  ];
+  for (addr in validAddresses.vals()) {
+    assert Address.isValidAddress(addr);
+  };
+
+  // Test that invalid addresses are caught
+  let mixedAddresses = [
+    "0x0000000000000000000000000000000000000000000000000000000000000001",
+    "invalid_address",
+    "0x0000000000000000000000000000000000000000000000000000000000000002"
+  ];
+  var hasInvalid = false;
+  for (addr in mixedAddresses.vals()) {
+    if (not Address.isValidAddress(addr)) {
+      hasInvalid := true;
+    };
+  };
+  assert hasInvalid;
+
+  Debug.print("✅ Batch validation patterns work");
+};
+
 Debug.print("");
 Debug.print("🎉 All unit tests passed!");
 Debug.print("");

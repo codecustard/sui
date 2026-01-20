@@ -17,6 +17,8 @@ import Address "../src/address";
 import Transaction "../src/transaction";
 import Validation "../src/validation";
 import Utils "../src/utils";
+import Wallet "../src/wallet";
+import Nat "mo:base/Nat";
 
 Debug.print("=================================================");
 Debug.print("     SUI Library Integration Test Suite");
@@ -489,13 +491,105 @@ Debug.print("✅ Address parsing to bytes works");
 Debug.print("");
 
 // ============================================================
+// SECTION 13: Batch Balance Query Types
+// ============================================================
+Debug.print("SECTION 13: Batch Balance Query Types");
+Debug.print("-------------------------------------------------");
+
+// Test BatchConfig with default values
+let defaultBatchConfig: Wallet.BatchConfig = {
+  maxAddresses = null;
+};
+assert defaultBatchConfig.maxAddresses == null;
+Debug.print("✅ BatchConfig default (null maxAddresses)");
+
+// Test BatchConfig with custom max
+let customBatchConfig: Wallet.BatchConfig = {
+  maxAddresses = ?25;
+};
+switch (customBatchConfig.maxAddresses) {
+  case (?max) { assert max == 25 };
+  case (null) { assert false };
+};
+Debug.print("✅ BatchConfig custom maxAddresses");
+
+// Test BalanceResult with success
+let testBalance: Wallet.Balance = {
+  total_balance = 5_000_000_000; // 5 SUI
+  objects = [];
+  object_count = 0;
+};
+
+let successBalanceResult: Wallet.BalanceResult = {
+  address = senderAddress;
+  result = #ok(testBalance);
+};
+assert successBalanceResult.address == senderAddress;
+switch (successBalanceResult.result) {
+  case (#ok(bal)) { assert bal.total_balance == 5_000_000_000 };
+  case (#err(_)) { assert false };
+};
+Debug.print("✅ BalanceResult with success");
+
+// Test BalanceResult with error
+let errorBalanceResult: Wallet.BalanceResult = {
+  address = recipientAddress;
+  result = #err("Address not found");
+};
+switch (errorBalanceResult.result) {
+  case (#ok(_)) { assert false };
+  case (#err(e)) { assert e == "Address not found" };
+};
+Debug.print("✅ BalanceResult with error");
+
+// Test BatchBalanceResult with mixed results
+let batchResult: Wallet.BatchBalanceResult = {
+  results = [successBalanceResult, errorBalanceResult];
+  successCount = 1;
+  failureCount = 1;
+};
+assert batchResult.results.size() == 2;
+assert batchResult.successCount == 1;
+assert batchResult.failureCount == 1;
+Debug.print("✅ BatchBalanceResult with mixed results");
+
+// Test batch validation patterns
+let testAddresses = [
+  "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "0x0000000000000000000000000000000000000000000000000000000000000002",
+  "0x0000000000000000000000000000000000000000000000000000000000000003",
+];
+
+// Verify all addresses are valid
+for (addr in testAddresses.vals()) {
+  assert Validation.isValidAddress(addr);
+};
+Debug.print("✅ Batch address validation");
+
+// Test batch size limits
+assert testAddresses.size() <= 50; // Default max
+assert testAddresses.size() > 0; // Not empty
+Debug.print("✅ Batch size within limits");
+
+// Test creating large batch for limit testing
+let largeBatch = Array.tabulate<Text>(50, func(i) {
+  let hex = Nat.toText(i);
+  let padding = Array.tabulate<Text>(64 - hex.size(), func(_) { "0" });
+  "0x" # Text.join("", padding.vals()) # hex
+});
+assert largeBatch.size() == 50;
+Debug.print("✅ Large batch creation (50 addresses)");
+
+Debug.print("");
+
+// ============================================================
 // FINAL SUMMARY
 // ============================================================
 Debug.print("=================================================");
 Debug.print("     Integration Test Suite Complete");
 Debug.print("=================================================");
 Debug.print("");
-Debug.print("✅ All 12 test sections passed!");
+Debug.print("✅ All 13 test sections passed!");
 Debug.print("");
 Debug.print("Tested Components:");
 Debug.print("  • Library metadata and versioning");
@@ -510,5 +604,6 @@ Debug.print("  • Transaction signing and verification");
 Debug.print("  • String and hex utilities");
 Debug.print("  • Object ID validation");
 Debug.print("  • Edge cases and error handling");
+Debug.print("  • Batch balance query types and validation");
 Debug.print("");
 Debug.print("🎉 SUI Library POC Integration Tests PASSED!");

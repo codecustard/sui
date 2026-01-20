@@ -65,6 +65,22 @@ module {
     object_count: Nat;
   };
 
+  // Batch balance query types
+  public type BatchConfig = {
+    maxAddresses: ?Nat; // Maximum addresses per batch (default 50)
+  };
+
+  public type BalanceResult = {
+    address: SuiAddress;
+    result: Result.Result<Balance, Text>;
+  };
+
+  public type BatchBalanceResult = {
+    results: [BalanceResult];
+    successCount: Nat;
+    failureCount: Nat;
+  };
+
   // SUI wallet implementation
   public class Wallet(config: WalletConfig) {
 
@@ -241,6 +257,91 @@ module {
       }
     };
 
+    // Get balances for multiple SUI addresses using JSON-RPC batch request
+    public func getBalances(
+      addresses: [SuiAddress],
+      batchConfig: ?BatchConfig
+    ) : async Result<BatchBalanceResult> {
+      let maxAddresses = switch (batchConfig) {
+        case (null) { 50 };
+        case (?cfg) {
+          switch (cfg.maxAddresses) {
+            case (null) { 50 };
+            case (?max) { max };
+          }
+        };
+      };
+
+      // Validate input
+      if (addresses.size() == 0) {
+        return #err("Address array cannot be empty");
+      };
+
+      if (addresses.size() > maxAddresses) {
+        return #err("Too many addresses: maximum " # Nat.toText(maxAddresses) # " allowed, got " # Nat.toText(addresses.size()));
+      };
+
+      // Validate all addresses before making request
+      for (address in addresses.vals()) {
+        if (not Address.isValidAddress(address)) {
+          return #err("Invalid SUI address: " # address);
+        };
+      };
+
+      // Execute batch query, fall back to sequential if not supported
+      let batchResults = switch (await queryBatchCoins(addresses)) {
+        case (#ok(results)) { results };
+        case (#err(error)) {
+          // Check if batch not supported - fall back to sequential
+          if (Text.contains(error, #text("not supported")) or Text.contains(error, #text("Batched requests"))) {
+            Debug.print("Batch not supported, falling back to sequential requests");
+            switch (await queryCoinsSequential(addresses)) {
+              case (#err(seqError)) { return #err(seqError) };
+              case (#ok(seqResults)) { seqResults };
+            }
+          } else {
+            return #err(error);
+          }
+        };
+      };
+
+      var successCount: Nat = 0;
+      var failureCount: Nat = 0;
+
+      let results = Array.mapEntries<Result.Result<[Types.SuiCoin], Text>, BalanceResult>(
+        batchResults,
+        func(coinResult, idx) {
+          let address = addresses[idx];
+          switch (coinResult) {
+            case (#err(error)) {
+              failureCount += 1;
+              { address = address; result = #err(error) }
+            };
+            case (#ok(coins)) {
+              successCount += 1;
+              let total = Array.foldLeft<Types.SuiCoin, Nat64>(
+                coins, 0, func(acc, coin) { acc + coin.balance }
+              );
+              {
+                address = address;
+                result = #ok({
+                  total_balance = total;
+                  objects = coins;
+                  object_count = coins.size();
+                })
+              }
+            };
+          }
+        }
+      );
+
+      #ok({
+        results = results;
+        successCount = successCount;
+        failureCount = failureCount;
+      })
+    };
+
     // Send transaction (create, sign, and submit to SUI network)
     public func sendTransaction(
       from_address: SuiAddress,
@@ -411,6 +512,185 @@ module {
         decoded_text
       } catch (error) {
         #err("HTTP request failed: " # Error.message(error))
+      }
+    };
+
+    // Query SUI coins for multiple addresses using JSON-RPC batch request
+    private func queryBatchCoins(addresses: [SuiAddress]) : async Result<[Result.Result<[Types.SuiCoin], Text>]> {
+      let rpc_url = switch (config.rpc_url) {
+        case (null) {
+          switch (config.network) {
+            case ("mainnet") { "https://fullnode.mainnet.sui.io" };
+            case ("testnet") { "https://fullnode.testnet.sui.io" };
+            case ("devnet") { "https://fullnode.devnet.sui.io" };
+            case (_) { "https://fullnode.devnet.sui.io" };
+          }
+        };
+        case (?url) { url };
+      };
+
+      // Build JSON-RPC batch request array
+      let batchRequests = Buffer.Buffer<Text>(addresses.size());
+      var requestId: Nat = 1;
+      for (address in addresses.vals()) {
+        let request = "{\"jsonrpc\":\"2.0\",\"id\":\"" # Nat.toText(requestId) # "\",\"method\":\"suix_getCoins\",\"params\":[\"" # address # "\",\"0x2::sui::SUI\",null,null]}";
+        batchRequests.add(request);
+        requestId += 1;
+      };
+
+      let request_body = "[" # Text.join(",", batchRequests.vals()) # "]";
+
+      let request_headers = [
+        { name = "Content-Type"; value = "application/json" },
+        { name = "User-Agent"; value = "icp-sui-wallet" }
+      ];
+
+      // Scale max_response_bytes based on address count (roughly 1KB per address response)
+      let baseResponseSize: Nat64 = 32768;
+      let perAddressSize: Nat64 = 2048;
+      let maxResponseBytes = baseResponseSize + (Nat64.fromNat(addresses.size()) * perAddressSize);
+
+      Debug.print("Making batch HTTP request to: " # rpc_url);
+      Debug.print("Batch request for " # Nat.toText(addresses.size()) # " addresses");
+
+      try {
+        let response = await (with cycles = 230_949_972_000) IC.ic.http_request({
+          url = rpc_url;
+          max_response_bytes = ?maxResponseBytes;
+          headers = request_headers;
+          body = ?Text.encodeUtf8(request_body);
+          method = #post;
+          is_replicated = ?false;
+          transform = null;
+        });
+
+        Debug.print("Batch HTTP response status: " # debug_show(response.status));
+
+        if (response.status != 200) {
+          let decoded_text = switch (Text.decodeUtf8(response.body)) {
+            case (null) { "Unknown error" };
+            case (?text) { text };
+          };
+          return #err("SUI RPC batch error: " # decoded_text);
+        };
+
+        switch (Text.decodeUtf8(response.body)) {
+          case (null) {
+            Debug.print("Failed to decode UTF8 batch response");
+            #err("Failed to decode batch RPC response")
+          };
+          case (?text) {
+            Debug.print("Batch RPC response received");
+            parseBatchCoinsResponse(text, addresses.size())
+          };
+        }
+      } catch (error) {
+        #err("Batch HTTP request failed: " # Error.message(error))
+      }
+    };
+
+    // Sequential fallback when batch requests not supported
+    private func queryCoinsSequential(addresses: [SuiAddress]) : async Result<[Result.Result<[Types.SuiCoin], Text>]> {
+      Debug.print("Executing sequential queries for " # Nat.toText(addresses.size()) # " addresses");
+      let results = Buffer.Buffer<Result.Result<[Types.SuiCoin], Text>>(addresses.size());
+
+      for (address in addresses.vals()) {
+        let result = await queryCoins(address);
+        results.add(result);
+      };
+
+      #ok(Buffer.toArray(results))
+    };
+
+    // Parse JSON-RPC batch response for coins
+    private func parseBatchCoinsResponse(json_text: Text, expectedCount: Nat) : Result<[Result.Result<[Types.SuiCoin], Text>]> {
+      Debug.print("Parsing batch response: " # json_text);
+      switch (Json.parse(json_text)) {
+        case (#err(e)) {
+          #err("Failed to parse batch JSON: " # debug_show(e))
+        };
+        case (#ok(json)) {
+          switch (json) {
+            case (#array(responses)) {
+              Debug.print("Got array response with " # Nat.toText(responses.size()) # " items");
+              if (responses.size() != expectedCount) {
+                return #err("Batch response count mismatch: expected " # Nat.toText(expectedCount) # ", got " # Nat.toText(responses.size()));
+              };
+
+              let results = Buffer.Buffer<Result.Result<[Types.SuiCoin], Text>>(expectedCount);
+              for (response in responses.vals()) {
+                results.add(parseSingleBatchResponse(response));
+              };
+              #ok(Buffer.toArray(results))
+            };
+            case (#object_(fields)) {
+              // Single object response - might be an error or single result
+              Debug.print("Got object response instead of array");
+              // Check if it's an error response
+              for ((key, value) in fields.vals()) {
+                if (key == "error") {
+                  return #err("Batch RPC error: " # debug_show(value));
+                };
+              };
+              #err("Expected JSON array for batch response, got object: " # json_text)
+            };
+            case (_) {
+              #err("Expected JSON array for batch response, got unexpected type")
+            };
+          }
+        };
+      }
+    };
+
+    // Parse a single response from within the batch
+    private func parseSingleBatchResponse(response: Json.Json) : Result.Result<[Types.SuiCoin], Text> {
+      switch (response) {
+        case (#object_(fields)) {
+          for ((key, value) in fields.vals()) {
+            switch (key) {
+              case ("result") {
+                switch (value) {
+                  case (#object_(result_fields)) {
+                    for ((result_key, result_value) in result_fields.vals()) {
+                      switch (result_key) {
+                        case ("data") {
+                          switch (result_value) {
+                            case (#array(coins_array)) {
+                              return parseCoinArray(coins_array);
+                            };
+                            case (_) { return #err("Expected coins array in data field") };
+                          }
+                        };
+                        case (_) { /* Ignore other fields */ };
+                      }
+                    };
+                  };
+                  case (_) { return #err("Expected result object") };
+                }
+              };
+              case ("error") {
+                switch (value) {
+                  case (#object_(error_fields)) {
+                    var errorMsg = "RPC error";
+                    for ((error_key, error_value) in error_fields.vals()) {
+                      if (error_key == "message") {
+                        switch (error_value) {
+                          case (#string(msg)) { errorMsg := msg };
+                          case (_) { };
+                        }
+                      }
+                    };
+                    return #err(errorMsg);
+                  };
+                  case (_) { return #err("Unknown error format") };
+                }
+              };
+              case (_) { /* Ignore other fields */ };
+            }
+          };
+          #err("No result or error field found")
+        };
+        case (_) { #err("Expected JSON object in batch response item") };
       }
     };
 
